@@ -1,0 +1,98 @@
+﻿{
+  // BrowseRouterAOT default config — copied to %AppData%\BrowseRouterAOT\browsers.json
+  // on first run. Edit there (the Host watches the file and reloads on save).
+  //
+  // Comments and trailing commas are allowed (System.Text.Json with relaxed options).
+  // Adjust paths to where your browsers live; %ProgramFiles%-style tokens are expanded.
+
+  "host": {
+    "pipeName": "BrowseRouterAOT",
+    "enableTrayIcon": true
+  },
+  "notify": { "enabled": false },
+  "log": { "enabled": true },
+
+  "defaultBrowser": "edge",
+
+  "browsers": {
+    "edge": { "path": "%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe" },
+    "chrome": {
+      "path": "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe",
+      "args": [ "--profile-directory=Default", "{url}" ]
+    },
+    "firefox": { "path": "%ProgramFiles%\\Mozilla Firefox\\firefox.exe" }
+  },
+
+  "rules": [
+    {
+      "browser": "edge",
+      "match": {
+        "type": "hostSuffix",
+        "value": "teams.microsoft.com"
+      }
+    },
+    {
+      "browser": "edge",
+      "match": {
+        "type": "hostSuffix",
+        "value": "sharepoint.com"
+      }
+    },
+    {
+      "browser": "edge",
+      "match": {
+        "type": "hostSuffix",
+        "value": "outlook.office.com"
+      }
+    },
+    {
+      "browser": "chrome",
+      "match": {
+        "type": "regex",
+        "value": "^https?://localhost(:\\d+)?(/|$)"
+      }
+    },
+    {
+      "browser": "chrome",
+      "match": {
+        "type": "hostSuffix",
+        "value": "google.com"
+      },
+      "exclude": {
+        "type": "pathPrefix",
+        "value": "/maps"
+      }
+    }
+  ],
+
+  "sourceRules": [
+    {
+      "browser": "edge",
+      "match": {
+        "type": "process",
+        "value": "TEAMS.EXE"
+      }
+    }
+  ],
+
+  "filters": [
+    {
+      "name": "Remove urchin tracking",
+      "find": "(.*)[&?]utm_source=[^&]+.*",
+      "replace": "$1",
+      "priority": 1
+    },
+    {
+      "name": "Bypass Teams Safelinks",
+      "find": ".*teams\\.public\\.onecdn\\.static\\.microsoft.*safelinks.*[?&]url=([^&]+).*",
+      "replace": "unescape($1)",
+      "priority": 2
+    },
+    {
+      "name": "Bypass Outlook URL Protection",
+      "find": ".*safelinks\\.protection\\.outlook\\.com.*[?&]url=([^&]+).*",
+      "replace": "$1",
+      "priority": 3
+    }
+  ]
+}

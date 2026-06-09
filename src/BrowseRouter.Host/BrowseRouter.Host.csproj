@@ -1,0 +1,35 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>BrowseRouter.Host</RootNamespace>
+    <AssemblyName>BrowseRouter.Host</AssemblyName>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <StripSymbols>true</StripSymbols>
+    <OptimizationPreference>Speed</OptimizationPreference>
+    <EventSourceSupport>false</EventSourceSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\icon_res\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BrowseRouter.Core\BrowseRouter.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embed the raw PNG to load it via Win32 API without System.Drawing -->
+    <EmbeddedResource Include="..\..\icon_res\icon.png" Link="Resources\icon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Ship the template config next to Host.exe; seeded into %AppData% on first run. -->
+    <Content Include="..\..\config\browsers.template.json" Link="browsers.template.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

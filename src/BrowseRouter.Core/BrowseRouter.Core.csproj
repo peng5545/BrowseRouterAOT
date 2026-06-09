@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Forward-compatible: lets the test project see any internal helpers we
+         might add later (e.g. internal filter helper for whitebox testing).
+         Today every Core type is public, so this is a no-op for current tests. -->
+    <InternalsVisibleTo Include="BrowseRouter.Tests" />
+  </ItemGroup>
+
+</Project>

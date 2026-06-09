@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel an in-flight run for the same ref when a new commit lands.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+
+jobs:
+  # Fast feedback — managed build + xUnit. No AOT, no native toolchain needed.
+  build-test:
+    name: Build & test
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore BrowseRouterAOT.slnx
+
+      - name: Build (Release)
+        run: dotnet build BrowseRouterAOT.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/BrowseRouter.Tests -c Release --no-build --logger trx --logger 'console;verbosity=normal'
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: '**/TestResults/*.trx'
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Full AOT publish — matches the local build.ps1. Uses MSVC from the
+  # preinstalled Visual Studio 2022 on windows-latest. x64 + arm64 in
+  # parallel; one failing RID shouldn't cancel the other.
+  aot:
+    name: AOT publish (${{ matrix.rid }})
+    runs-on: windows-latest
+    needs: build-test
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, win-arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish Launcher (AOT)
+        run: dotnet publish src/BrowseRouter.Launcher -c Release -r ${{ matrix.rid }} -o out
+
+      - name: Publish Host (AOT)
+        run: dotnet publish src/BrowseRouter.Host -c Release -r ${{ matrix.rid }} -o out
+
+      # Strip the PDBs (kept locally in dist/; not needed in CI artifact).
+      - name: Remove PDBs
+        shell: pwsh
+        run: Get-ChildItem -Path out -Recurse -Filter '*.pdb' | Remove-Item -Force
+
+      # Safety net: Host.csproj already ships the template via <Content Include>
+      # with CopyToOutputDirectory, but copy it again in case that ever changes.
+      - name: Copy template config
+        shell: pwsh
+        run: Copy-Item config/browsers.template.json out/
+
+      - name: Show artifacts
+        shell: pwsh
+        run: Get-ChildItem -Path out -Recurse | Select-Object FullName, Length
+
+      - name: Upload AOT artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: browserouter-aot-${{ matrix.rid }}
+          path: out/**
+          if-no-files-found: error
+          retention-days: 30

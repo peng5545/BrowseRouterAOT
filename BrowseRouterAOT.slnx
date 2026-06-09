@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BrowseRouter.Core/BrowseRouter.Core.csproj" />
+    <Project Path="src/BrowseRouter.Host/BrowseRouter.Host.csproj" />
+    <Project Path="src/BrowseRouter.Launcher/BrowseRouter.Launcher.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BrowseRouter.Tests/BrowseRouter.Tests.csproj" />
+  </Folder>
+</Solution>

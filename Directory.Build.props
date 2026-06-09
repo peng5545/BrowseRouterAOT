@@ -1,0 +1,26 @@
+﻿<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CA1031;CA1056;CA1054;CA1002</NoWarn>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>All</AnalysisMode>
+    <Version>0.1.0</Version>
+    <Product>BrowseRouterAOT</Product>
+    <Authors>BrowseRouterAOT</Authors>
+    <Copyright>2026</Copyright>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <!-- LibraryImport source-generated P/Invoke uses internal unsafe pointer arithmetic. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+</Project>
