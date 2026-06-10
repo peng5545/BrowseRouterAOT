@@ -4,6 +4,7 @@ using BrowseRouter.Host.Interop;
 using BrowseRouter.Host.Logging;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -332,17 +333,30 @@ internal sealed class ToastNotifier : IDisposable
 
     private void CloseAllToasts()
     {
-        foreach (var t in _active)
+        // Snapshot the list — Close() → WM_NCDESTROY → OnToastClosed
+        // removes the toast from _active, modifying the collection we're
+        // iterating. (The copy itself isn't modified; only _active is.)
+        var copy = _active.ToList();
+        foreach (var t in copy)
         {
             try
             {
-                if (t.Handle != IntPtr.Zero)
-                    User32.DestroyWindow(t.Handle);
-                t.Dispose();
+                t.Close();
             }
             catch (Exception ex)
             {
-                _log.Warn($"Toast dispose: {ex.Message}");
+                _log.Warn($"Toast close: {ex.Message}");
+            }
+            finally
+            {
+                // Safety net: Close()'s DestroyWindow normally fires
+                // WM_NCDESTROY synchronously, which calls OnToastClosed →
+                // Dispose. If Close() throws, or if the underlying
+                // DestroyWindow ever fails to surface WM_NCDESTROY (the
+                // old AnimateWindow-in-WndProc bug), this finally clause
+                // makes sure the GCHandle + GDI handles are still released.
+                // Idempotent.
+                t.Dispose();
             }
         }
 
