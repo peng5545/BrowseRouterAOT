@@ -4,32 +4,25 @@ namespace BrowseRouter.Host.Interop;
 
 /// <summary>
 /// P/Invoke wrappers and constants for <c>shell32.dll</c> — tray icon API.
+/// Balloon-specific fields and flags are intentionally absent: notifications go
+/// through the self-drawn toast popup (see <c>BrowseRouter.Host.Notify.ToastNotifier</c>),
+/// not <c>Shell_NotifyIcon</c>'s NIF_INFO path. The struct layout itself is kept
+/// at the V3 size so <c>Shell_NotifyIcon</c>'s <c>cbSize</c> validation still
+/// accepts our calls — the unused balloon fields stay as struct padding.
 /// </summary>
 internal static partial class Shell32
 {
-    // NIM_ values: Add/Modify/Delete/SetFocus/SetVersion
+    // NIM_ values used: Add/Delete/SetVersion. NIM_MODIFY is not used — the
+    // tray icon is created once and never updated in place.
     public const uint NimAdd = 0x00000000;
-    public const uint NimModify = 0x00000001;
     public const uint NimDelete = 0x00000002;
     public const uint NimSetversion = 0x00000004;
 
-    // NIF_ flags select which NOTIFYICONDATA fields are valid.
+    // NIF_ flags — only the ones the tray icon actually needs.
     public const uint NifMessage = 0x00000001;
     public const uint NifIcon = 0x00000002;
     public const uint NifTip = 0x00000004;
-    public const uint NifState = 0x00000008;
-    public const uint NifInfo = 0x00000010;
-    public const uint NifGuid = 0x00000020;
-    public const uint NifRealtime = 0x00000040;
     public const uint NifShowtip = 0x00000080;
-
-    // NIIF_ values control balloon icon.
-    public const uint NiifNone = 0x00000000;
-    public const uint NiifInfo = 0x00000001;
-    public const uint NiifWarning = 0x00000002;
-    public const uint NiifError = 0x00000003;
-    public const uint NiifUser = 0x00000004;
-    public const uint NiifLargeIcon = 0x00000020;
 
     /// <summary>
     /// Versions for NIM_SETVERSION. v4 enables the proper WM_CONTEXTMENU.
@@ -39,7 +32,9 @@ internal static partial class Shell32
     /// <summary>
     /// Layout matches the NOTIFYICONDATAW struct (Vista+). All string buffers are
     /// inlined fixed-size — required by Win32 marshalling. Use <c>cbSize = sizeof</c>
-    /// at run-time to pin the version.
+    /// at run-time to pin the version. The balloon fields (szInfo, szInfoTitle,
+    /// dwInfoFlags, hBalloonIcon) are retained so <c>cbSize</c> matches the
+    /// V3 size the OS validates against, but the host never sets them.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 8)]
     internal unsafe struct Notifyicondataw
@@ -70,18 +65,6 @@ internal static partial class Shell32
         {
             fixed (char* p = szTip)
                 CopyString(value, p, 128);
-        }
-
-        public void SetInfo(string? value)
-        {
-            fixed (char* p = szInfo)
-                CopyString(value, p, 256);
-        }
-
-        public void SetInfoTitle(string? value)
-        {
-            fixed (char* p = szInfoTitle)
-                CopyString(value, p, 64);
         }
 
         private static void CopyString(string? source, char* dest, int destChars)

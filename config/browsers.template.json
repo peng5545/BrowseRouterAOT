@@ -9,7 +9,10 @@
     "pipeName": "BrowseRouterAOT",
     "enableTrayIcon": true
   },
-  "notify": { "enabled": false },
+  // Notifications render as self-drawn toast popups at the bottom-right of the
+  // work area (independent of the tray icon — works even when enableTrayIcon=false).
+  // durationMs is clamped to [500, 60000].
+  "notify": { "enabled": false, "durationMs": 3000 },
   "log": { "enabled": true },
 
   "defaultBrowser": "edge",

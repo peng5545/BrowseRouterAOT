@@ -95,7 +95,7 @@ internal static class Program
             return 4;
         }
 
-        for (int i = 0; i < 5; i++)
+        for (var i = 0; i < 5; i++)
         {
             try
             {

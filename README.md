@@ -20,7 +20,7 @@ Inspired by [nref/BrowseRouter](https://github.com/nref/BrowseRouter); rewritten
 - **URL filters** rewrite URLs before launch — strip `utm_*`, unwrap SafeLinks, etc. Regex with `$1` and an `unescape($1)` macro.
 - **Background daemon** — rules parsed once, then in-memory. Hot-reloaded on file save.
 - **Tray icon** with Reload / Open config / Open log / Default Apps / Quit menu.
-- **Desktop notifications** ("Opening Edge — https://…").
+- **Custom toast popups** (`BrowseRouter (AOT)` / `edge->https://…`) — self-drawn Win32 windows, not subject to Action Center's ~5 s floor.
 - **Foreground-aware** — brings the chosen browser to the front even when it was sitting in the background.
 - **No console flash** — Launcher runs as GUI subsystem, so Windows never briefly shows a black window on URL clicks.
 - **Per-user install** — no admin needed. Registration is plain HKCU.
@@ -153,7 +153,7 @@ If **no** element contains any tag, `{url}` is appended automatically — so `"a
 
 ```json
 { 
-  "name": "Unwrap Outlook SafeLinks",
+  "name":    "Unwrap Outlook SafeLinks",
   "find":    ".*safelinks\\.protection\\.outlook\\.com.*[?&]url=([^&]+).*",
   "replace": "unescape($1)",
   "priority": 2 
@@ -203,3 +203,8 @@ Subcommand flags (`--register`, etc.) on the Launcher are delegated to the Host.
 - **Per-user only** — registration is HKCU. No machine-wide setup.
 
 ---
+
+## Credits
+
+- **[nref/BrowseRouter](https://github.com/nref/BrowseRouter)** — the original "route URLs by JSON rules" design. This project is a from-scratch rewrite on .NET 10 + Native AOT.
+- **[noxad/windows-toast-notifications](https://github.com/noxad/windows-toast-notifications)** — design inspiration for the self-drawn toast popup (`Host/Notify/ToastWindow.cs` + `ToastNotifier.cs`). noxad's library is WinForms-based; the implementation here is a pure-Win32 P/Invoke port (no `System.Windows.Forms`, no `System.Drawing`) so it fits the project's AOT-friendly "only Win32" rule. Same ideas: hidden message-only dispatcher window + dedicated STA thread + per-toast HWND stacked at the bottom-right of the work area, `WM_TIMER` auto-dismiss, `AnimateWindow` fade out, click to close.

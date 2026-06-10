@@ -109,6 +109,12 @@ public sealed class RootConfig
             warnings.Add($"DefaultBrowser '{DefaultBrowser}' is not defined in 'browsers'.");
         }
 
+        if (Notify is { Enabled: true, DurationMs: < 500 or > 60000 })
+        {
+            warnings.Add(
+                $"Notify.DurationMs ({Notify.DurationMs}ms) is outside the recommended range of 500ms to 60000ms.");
+        }
+
         // Defensive: a hand-edited config could in principle null these out
         // (e.g. by serialising a config whose state we don't control). Treat
         // null as empty so Validate stays total.

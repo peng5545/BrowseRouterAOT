@@ -1,6 +1,5 @@
 ﻿using BrowseRouter.Core;
 using BrowseRouter.Core.Ipc;
-using BrowseRouter.Core.Routing;
 using BrowseRouter.Host.Config;
 using BrowseRouter.Host.Interop;
 using BrowseRouter.Host.Ipc;
@@ -9,8 +8,8 @@ using BrowseRouter.Host.Notify;
 using BrowseRouter.Host.Registration;
 using BrowseRouter.Host.Routing;
 using BrowseRouter.Host.Tray;
-using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace BrowseRouter.Host;
@@ -21,12 +20,8 @@ namespace BrowseRouter.Host;
 /// </summary>
 internal static class Program
 {
-    // Menu command ids — kept stable for unit/regression testing.
-    private const int CmdReload = 1001;
-    private const int CmdOpenDir = 1002;
-    private const int CmdSettings = 1003;
-    private const int CmdOpenLog = 1004;
-    private const int CmdQuit = 1099;
+    // Menu command ids live on NotifierHost (NotifierHost.CmdReload etc.) —
+    // this entry point no longer holds any daemon-event state of its own.
 
     private static async Task<int> Main(string[] args)
     {
@@ -97,39 +92,32 @@ internal static class Program
         // 3) Apply log options from config.
         log.UpdateOptions(store.Current.Log);
 
-        // 4) Tray icon + notifier (UI thread is owned by TrayIcon). The tray is
-        // optional — when host.enableTrayIcon=false, the Host daemon still runs the
-        // pipe server / config watcher, but exposes no UI. Exiting the daemon in
+        // 4) Toast notifier + tray icon + event-host relay. The tray is optional
+        // — when host.enableTrayIcon=false, the Host daemon still runs the pipe
+        // server / config watcher, but exposes no UI. Exiting the daemon in
         // headless mode is then possible only via Ctrl+C here, or Task Manager.
+        //
+        // The toast notifier runs on its own STA message-loop thread, so it is
+        // independent of the tray icon and works in headless mode too.
+        //
+        // Event subscriptions use method-group references on `host` (not
+        // lambdas capturing `notifier`). That sidesteps the "captured variable
+        // is disposed in the outer scope" IDE warning that fires when an
+        // event-handler lambda closes over a `using var` — method groups don't
+        // create closures.
         var exitSignal = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var enableTrayIcon = store.Current.Host.EnableTrayIcon;
+        using var notifier = new ToastNotifier(log, store.Current.Notify);
+        notifier.Start();
+        var launcher = new BrowserLauncher(log);
+        var host = new NotifierHost(notifier, log, store, exitSignal, launcher);
+
         using var tray = enableTrayIcon ? new TrayIcon(log) : null;
-        var notifier = new BalloonNotifier(tray, store.Current.Notify);
         if (tray is not null)
         {
             tray.Start();
-
-            var trayWindowHandle = tray.WindowHandle;
-            tray.OnTrayRightClick += () =>
-            {
-                var pick = ContextMenu.Show(trayWindowHandle, [
-                    new ContextMenu.Item(CmdReload, "Reload config"),
-                    new ContextMenu.Item(CmdOpenDir, "Open config folder"),
-                    new ContextMenu.Item(CmdOpenLog, "Open log folder"),
-                    ContextMenu.Separator,
-                    new ContextMenu.Item(CmdSettings, "Open Default Apps settings"),
-                    ContextMenu.Separator,
-                    new ContextMenu.Item(CmdQuit, "Quit BrowseRouter")
-                ]);
-                if (pick != 0)
-                {
-                    // TrackPopupMenu with TPM_RETURNCMD returns the id directly without
-                    // posting WM_COMMAND; dispatch ourselves.
-                    HandleMenuCommand(pick, log, store, notifier, exitSignal);
-                }
-            };
-            tray.OnMenuCommand += cmd => HandleMenuCommand(cmd, log, store, notifier, exitSignal);
-
+            tray.OnTrayRightClick += host.OnTrayRightClick;
+            tray.OnMenuCommand += host.HandleMenuCommand;
             log.Info("Tray icon enabled.");
         }
         else
@@ -138,23 +126,15 @@ internal static class Program
         }
 
         // 5) Config watcher — debounced reload; re-apply log/notify options on reload.
-        using var watcher = new ConfigWatcher(store, log, onReload: () =>
-        {
-            log.UpdateOptions(store.Current.Log);
-            notifier.UpdateOptions(store.Current.Notify);
-        });
+        using var watcher = new ConfigWatcher(store, log, onReload: host.OnConfigReload);
         watcher.Start();
 
         // 6) Pipe server — the heart of the daemon.
-        var launcher = new BrowserLauncher(log);
         var pipeName = PipeProtocol.BuildPipeName(store.Current.Host.PipeName ?? Constants.PipeBaseName,
             System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value ?? "anon",
             Kernel32.GetCurrentSessionId());
 
-        var server = new PipeServer(pipeName, log, async (req, ct) =>
-        {
-            return await Task.Run(() => Handle(req, store, launcher, notifier, log), ct).ConfigureAwait(false);
-        });
+        var server = new PipeServer(pipeName, log, host.HandlePipeRequest);
 
         // 7) Wait for shutdown (tray Quit or Ctrl+C from console invocation).
         Console.CancelKeyPress += (_, e) =>
@@ -173,129 +153,6 @@ internal static class Program
         finally
         {
             await server.DisposeAsync().ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>
-    /// Resolve a URL request to a route, launch the browser, balloon-notify.
-    /// </summary>
-    private static OpenUrlResponse Handle(
-        OpenUrlRequest req,
-        ConfigStore store,
-        BrowserLauncher launcher,
-        BalloonNotifier notifier,
-        FileLogger log
-    )
-    {
-        log.Info(
-            $"Open: \"{req.Url}\" (from pid={req.CallerPid}, sess={req.CallerSessionId}, process={req.SourceProcessName ?? "?"}, title={req.SourceWindowTitle ?? "?"})");
-
-        if (!RuleEngine.Resolve(store.Current, req.Url, req.SourceProcessName, req.SourceProcessPath,
-                req.SourceWindowTitle, out var route, out var err,
-                onFilterError: (name, ex) => log.Warn($"Filter '{name}' failed: {ex.Message}")))
-        {
-            log.Warn($"Resolve failed: {err.Reason} ({err.Detail}).");
-            notifier.Notify("BrowseRouter", $"No browser for URL: {err.Detail}");
-            return new OpenUrlResponse { Ok = false, Error = $"{err.Reason}: {err.Detail}" };
-        }
-
-        // NotNullWhen(true) on route guarantees non-null here.
-        var pid = launcher.Launch(route);
-        if (pid is null)
-        {
-            notifier.Notify("BrowseRouter", $"Failed to launch {route.BrowserName}");
-            return new OpenUrlResponse { Ok = false, Error = $"Failed to launch {route.BrowserName}" };
-        }
-
-        var title = $"Opening {route.BrowserName}";
-        var body = route.AppliedFilter is null
-            ? route.Uri.OriginalString
-            : $"[filtered: {route.AppliedFilter}] {route.Uri.OriginalString}";
-        notifier.Notify(title, body);
-
-        return new OpenUrlResponse
-        {
-            Ok = true,
-            ChosenBrowser = route.BrowserName,
-            ResolvedUrl = route.Uri.OriginalString,
-            AppliedFilter = route.AppliedFilter,
-            Reason = route.Reason
-        };
-    }
-
-    private static void HandleMenuCommand(
-        int cmd,
-        FileLogger log,
-        ConfigStore store,
-        BalloonNotifier notifier,
-        TaskCompletionSource<int> exitSignal
-    )
-    {
-        switch (cmd)
-        {
-            case CmdReload:
-                // Force an immediate, synchronous reload.
-                var fresh = ConfigLoader.TryLoad(ConfigPaths.ConfigFile, out var err, log);
-                if (fresh is null)
-                {
-                    log.Warn($"Manual reload failed: {err?.Message}");
-                    notifier.Notify("Reload failed", err?.Message ?? "Unknown error");
-                }
-                else
-                {
-                    store.Replace(fresh);
-                    log.UpdateOptions(fresh.Log);
-                    notifier.UpdateOptions(fresh.Notify);
-                    log.Info("Config reloaded via tray menu.");
-                    notifier.Notify("Config reloaded", $"{fresh.Rules.Count} rules, {fresh.Browsers.Count} browsers.");
-                }
-
-                break;
-
-            case CmdOpenDir:
-                try
-                {
-                    using var _ = Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "explorer.exe",
-                        ArgumentList = { "/select,", ConfigPaths.ConfigFile },
-                        UseShellExecute = false
-                    });
-                }
-                catch (Exception ex)
-                {
-                    log.Warn($"Open config folder failed: {ex.Message}");
-                }
-
-                break;
-
-            case CmdOpenLog:
-                // Best-effort: ensure the log directory exists (FileLogger may not
-                // have rotated there yet) before handing it to explorer.
-                try
-                {
-                    Directory.CreateDirectory(Constants.DefaultLogDirectory);
-                    using var _ = Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "explorer.exe",
-                        Arguments = Constants.DefaultLogDirectory,
-                        UseShellExecute = false
-                    });
-                }
-                catch (Exception ex)
-                {
-                    log.Warn($"Open log folder failed: {ex.Message}");
-                }
-
-                break;
-
-            case CmdSettings:
-                SettingsLauncher.OpenDefaultApps();
-                break;
-
-            case CmdQuit:
-                exitSignal.TrySetResult(0);
-                break;
         }
     }
 
@@ -341,9 +198,7 @@ internal static class Program
         var (_, launcherExe) = ResolveExePaths();
         var expectedCmd = $"\"{launcherExe}\" \"%1\"";
         var existingCmd = ReadExistingOpenCommand();
-        if (string.Equals(existingCmd, expectedCmd, StringComparison.OrdinalIgnoreCase))
-            return Unregister();
-        return Register();
+        return string.Equals(existingCmd, expectedCmd, StringComparison.OrdinalIgnoreCase) ? Unregister() : Register();
     }
 
     private static string? ReadExistingOpenCommand()
@@ -405,13 +260,8 @@ internal static class Program
         return (hostExe, launcherExe);
     }
 
-    private static bool EqualsAny(string s, params string[] options)
-    {
-        foreach (var o in options)
-            if (string.Equals(s, o, StringComparison.OrdinalIgnoreCase))
-                return true;
-        return false;
-    }
+    private static bool EqualsAny(string s, params string[] options) =>
+        options.Any(o => string.Equals(s, o, StringComparison.OrdinalIgnoreCase));
 
     private static void PrintHelp()
     {
