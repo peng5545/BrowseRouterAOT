@@ -11,6 +11,8 @@ Route every link click on Windows to the browser **you** want, based on JSON rul
 
 Inspired by [nref/BrowseRouter](https://github.com/nref/BrowseRouter); rewritten on **.NET 10 + Native AOT** with a clean JSON schema, hot-reloading config.
 
+Toast popup UI inspired by [noxad/windows-toast-notifications](https://github.com/noxad/windows-toast-notifications) — ported from WinForms to pure Win32 P/Invoke (no `System.Windows.Forms` / `System.Drawing`) to fit the AOT-only-Win32 rule.
+
 ---
 
 ## Features
@@ -201,10 +203,3 @@ Subcommand flags (`--register`, etc.) on the Launcher are delegated to the Host.
 - **Windows 10 1803+** does not let any app silently set itself as the default browser. After `--register`, the Default Apps page opens — you must click "BrowseRouter (AOT)" once.
 - **Regex from config** is AOT-interpreted (no JIT for `RegexOptions.Compiled`). Performance is fine for one URL per click but heavy regex on every match list would be visible.
 - **Per-user only** — registration is HKCU. No machine-wide setup.
-
----
-
-## Credits
-
-- **[nref/BrowseRouter](https://github.com/nref/BrowseRouter)** — the original "route URLs by JSON rules" design. This project is a from-scratch rewrite on .NET 10 + Native AOT.
-- **[noxad/windows-toast-notifications](https://github.com/noxad/windows-toast-notifications)** — design inspiration for the self-drawn toast popup (`Host/Notify/ToastWindow.cs` + `ToastNotifier.cs`). noxad's library is WinForms-based; the implementation here is a pure-Win32 P/Invoke port (no `System.Windows.Forms`, no `System.Drawing`) so it fits the project's AOT-friendly "only Win32" rule. Same ideas: hidden message-only dispatcher window + dedicated STA thread + per-toast HWND stacked at the bottom-right of the work area, `WM_TIMER` auto-dismiss, `AnimateWindow` fade out, click to close.
