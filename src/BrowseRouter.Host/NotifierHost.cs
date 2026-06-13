@@ -161,11 +161,31 @@ internal sealed class NotifierHost(
     {
         try
         {
+            // AppContext.BaseDirectory returns a path with a trailing directory
+            // separator. explorer.exe treats paths ending in `\` inconsistently
+            // across Windows versions — some interpret it as "the drive" or
+            // "This PC" instead of the folder, so `D:\Program Files\App\`
+            // silently opens the wrong window. Strip the trailing separator(s)
+            // so the path is in canonical form before being handed off.
+            var normalized = path.TrimEnd('\\', '/');
+
             var psi = new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = false };
             if (select)
-                psi.ArgumentList.Add($"/select,{path}");
-            else
-                psi.ArgumentList.Add(path);
+            {
+                // /select, must be passed as its own argv element followed by
+                // the path as the next argv element. End-to-end test against
+                // a real fixture folder whose name contains a space showed
+                // the *combined* form (`/select,"<path>"` as a single arg)
+                // parses incorrectly: explorer treats the whole token as a
+                // malformed switch and silently falls back to opening
+                // "Documents" (its default location when no valid target is
+                // resolved). Splitting into two args lets explorer's switch
+                // parser take the standard "/select, <path>" code path, which
+                // opens the parent folder with the file highlighted.
+                psi.ArgumentList.Add("/select,");
+            }
+
+            psi.ArgumentList.Add(normalized);
             using var _ = Process.Start(psi);
         }
         catch (Exception ex)
