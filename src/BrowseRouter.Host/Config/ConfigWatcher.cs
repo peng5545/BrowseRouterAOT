@@ -20,7 +20,13 @@ internal sealed class ConfigWatcher : IDisposable
     private readonly FileLogger _log;
     private readonly Action? _onReload;
     private readonly Lock _gate = new();
+
     private CancellationTokenSource? _pending;
+
+    // Interlocked gate for DoReload: ensures two parallel debounce expirations
+    // (or a manual ReloadNow racing a debounced reload) don't both deserialize
+    // the same file. The losing caller observes _reloading==1 and bails.
+    private int _reloading;
 
     public ConfigWatcher(ConfigStore store, FileLogger log, Action? onReload = null)
     {
@@ -99,24 +105,42 @@ internal sealed class ConfigWatcher : IDisposable
 
     private void DoReload()
     {
-        var path = ConfigPaths.ConfigFile;
-        var next = ConfigLoader.TryLoad(path, out var error, _log);
-        if (next is null)
+        // Serialize concurrent reloads. The first caller does the work; the rest
+        // (which can include a manual ReloadNow racing a debounced one) bail
+        // rather than re-parse the same file. The interlocked release is the
+        // last thing we do so a later reload that arrives mid-parse still gets
+        // its turn.
+        if (Interlocked.CompareExchange(ref _reloading, 1, 0) != 0)
         {
-            _log.Warn($"Config reload failed; keeping previous snapshot. {error?.GetType().Name}: {error?.Message}");
             return;
         }
 
-        _store.Replace(next);
-        _log.Info(
-            $"Config reloaded: {next.Rules.Count} rules, {next.SourceRules.Count} source rules, {next.Filters.Count} filters, {next.Browsers.Count} browsers.");
         try
         {
-            _onReload?.Invoke();
+            var path = ConfigPaths.ConfigFile;
+            var next = ConfigLoader.TryLoad(path, out var error, _log);
+            if (next is null)
+            {
+                _log.Warn(
+                    $"Config reload failed; keeping previous snapshot. {error?.GetType().Name}: {error?.Message}");
+                return;
+            }
+
+            _store.Replace(next);
+            _log.Info(
+                $"Config reloaded: {next.Rules.Count} rules, {next.SourceRules.Count} source rules, {next.Filters.Count} filters, {next.Browsers.Count} browsers.");
+            try
+            {
+                _onReload?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Post-reload hook", ex);
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            _log.Error("Post-reload hook", ex);
+            Interlocked.Exchange(ref _reloading, 0);
         }
     }
 

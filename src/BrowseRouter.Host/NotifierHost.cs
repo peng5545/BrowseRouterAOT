@@ -100,20 +100,7 @@ internal sealed class NotifierHost(
                 break;
 
             case CmdOpenDir:
-                try
-                {
-                    using var _ = Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "explorer.exe",
-                        ArgumentList = { "/select,", ConfigPaths.ConfigFile },
-                        UseShellExecute = false
-                    });
-                }
-                catch (Exception ex)
-                {
-                    log.Warn($"Open config folder failed: {ex.Message}");
-                }
-
+                OpenExplorer(ConfigPaths.ConfigFile, select: true, "Open config folder");
                 break;
 
             case CmdOpenAppDir:
@@ -122,35 +109,15 @@ internal sealed class NotifierHost(
                 // install directory alongside the Launcher.exe. Use it instead
                 // of an environment variable so the path is correct even when
                 // the user has moved the whole bundle to a custom location.
-                try
-                {
-                    var appDir = AppContext.BaseDirectory;
-                    var psi = new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = false };
-                    psi.ArgumentList.Add(appDir);
-                    using var _ = Process.Start(psi);
-                }
-                catch (Exception ex)
-                {
-                    log.Warn($"Open app folder failed: {ex.Message}");
-                }
-
+                OpenExplorer(AppContext.BaseDirectory, select: false, "Open app folder");
                 break;
 
             case CmdOpenLog:
                 // Best-effort: ensure the log directory exists (FileLogger may not
                 // have rotated there yet) before handing it to explorer.
-                try
-                {
-                    Directory.CreateDirectory(Constants.DefaultLogDirectory);
-                    var psi = new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = false };
-                    psi.ArgumentList.Add(Constants.DefaultLogDirectory);
-                    using var _ = Process.Start(psi);
-                }
-                catch (Exception ex)
-                {
-                    log.Warn($"Open log folder failed: {ex.Message}");
-                }
-
+                try { Directory.CreateDirectory(Constants.DefaultLogDirectory); }
+                catch (Exception ex) { log.Warn($"Create log dir failed: {ex.Message}"); }
+                OpenExplorer(Constants.DefaultLogDirectory, select: false, "Open log folder");
                 break;
 
             case CmdSettings:
@@ -173,6 +140,31 @@ internal sealed class NotifierHost(
     {
         log.UpdateOptions(store.Current.Log);
         notifier.UpdateOptions(store.Current.Notify);
+    }
+
+    // ─── Menu helpers ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Hand <paramref name="path"/> to Windows Explorer. <paramref name="select"/>
+    /// picks the file when true (highlights the config file in its folder) or the
+    /// folder itself when false. Failures are logged with <paramref name="opName"/>
+    /// so the user can correlate a "nothing happened" click with a log line.
+    /// </summary>
+    private void OpenExplorer(string path, bool select, string opName)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = false };
+            if (select)
+                psi.ArgumentList.Add($"/select,{path}");
+            else
+                psi.ArgumentList.Add(path);
+            using var _ = Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            log.Warn($"{opName} failed: {ex.Message}");
+        }
     }
 
     // ─── Pipe server ──────────────────────────────────────────────────────────

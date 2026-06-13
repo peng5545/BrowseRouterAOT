@@ -128,8 +128,15 @@ internal sealed class FileLogger(LogOptions? options = null) : IDisposable
         try
         {
             Directory.CreateDirectory(dir);
-            // FileShare.Read so users can tail the live log without errors.
-            var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
+            // FileShare.ReadWrite (not Read) so a second Host — e.g. a stale
+            // session whose processes are still alive (disconnected RDP,
+            // Fast User Switching) — can also open the same file. A quick
+            // click in the new session then writes successfully instead of
+            // silently losing the log line. Other writers' appends may
+            // occasionally interleave at the byte level, but a single log
+            // line is a short Write+Flush pair that the OS delivers
+            // atomically at the buffer-cache level in practice.
+            var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
             // StreamWriter's default UTF-8-without-BOM is fine for log files.
             writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
             {

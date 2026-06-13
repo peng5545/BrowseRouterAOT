@@ -236,7 +236,22 @@ internal static class Program
         var template = ConfigPaths.TemplateConfigFile;
         if (!File.Exists(template))
         {
+            // Also write to stderr so a user who runs Host from a console
+            // (--host in a terminal, or via the Register subcommand) sees the
+            // warning immediately — without this they'd only see a stray
+            // "no rule matched" toast on every click and have to dig into
+            // the log file to find out why.
             log.Warn($"No template found at {template}; starting with empty config.");
+            try
+            {
+                Console.Error.WriteLine(
+                    $"{Constants.AppName}: no template at {template}; every click will hit NoRuleMatched.");
+            }
+            catch
+            {
+                /* no console attached */
+            }
+
             return;
         }
 

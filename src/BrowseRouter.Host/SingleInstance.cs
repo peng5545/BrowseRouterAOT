@@ -1,4 +1,6 @@
 ﻿using BrowseRouter.Core;
+using BrowseRouter.Core.Ipc;
+using BrowseRouter.Host.Interop;
 using System.Diagnostics;
 using System.Security.Principal;
 using System.Threading;
@@ -42,18 +44,18 @@ internal sealed class SingleInstance : IDisposable
     public static SingleInstance TryAcquire()
     {
         var sid = WindowsIdentity.GetCurrent().User?.Value ?? "unknown";
-        var session = Interop.Kernel32.GetCurrentSessionId();
+        var session = Kernel32.GetCurrentSessionId();
         // Mutex names must not contain backslashes. SIDs only contain
         // alphanumeric and hyphens, but be defensive in case caller passed a
-        // domain-qualified name.
-        var nameTail = $"{Constants.AppId}.Host.{sid}.{session}".Replace('\\', '-');
+        // domain-qualified name. Shared with PipeProtocol.
+        var nameTail = $"{Constants.AppId}.Host.{PipeProtocol.Sanitize(sid)}.{session}";
         var name = $"Local\\{nameTail}";
 
         if (Mutex.TryOpenExisting(name, out var existing))
         {
             // A mutex with our name already exists. The owning process is
             // either live (we lose the race) or dead (we can take over).
-            if (IsAnotherHostProcessAlive())
+            if (IsAnotherHostProcessAlive(session))
             {
                 existing.Dispose();
                 return new SingleInstance(existing, owned: false);
@@ -83,10 +85,13 @@ internal sealed class SingleInstance : IDisposable
 
     /// <summary>
     /// True if any <c>BrowseRouter.Host</c> process other than ourselves is alive
-    /// in this session. Cheap best-effort — assumes one installation per user
-    /// per session (which is the supported deployment).
+    /// in <paramref name="currentSession"/>. Cross-session processes are NOT
+    /// considered — they own a different mutex in a different session and cannot
+    /// be the live owner of THIS session's mutex. Without this filter, a sibling
+    /// session's host would falsely block us from taking over an abandoned
+    /// mutex, leaving the new session permanently headless.
     /// </summary>
-    private static bool IsAnotherHostProcessAlive()
+    private static bool IsAnotherHostProcessAlive(int currentSession)
     {
         var self = Environment.ProcessId;
         try
@@ -95,7 +100,11 @@ internal sealed class SingleInstance : IDisposable
             {
                 try
                 {
-                    if (p.Id != self)
+                    if (p.Id == self)
+                        continue;
+                    // Same-session check: a different session's host owns a
+                    // different mutex name and is irrelevant to ours.
+                    if (Kernel32.ProcessIdToSessionId((uint) p.Id, out var sid) && (int) sid == currentSession)
                         return true;
                 }
                 finally

@@ -46,8 +46,16 @@ internal sealed class BrowserLauncher(FileLogger log)
         try
         {
             using var proc = Process.Start(psi);
-            log.Info($"Launched {route.BrowserName} (pid={proc?.Id}) for {route.Uri.OriginalString}; {route.Reason}");
-            return proc?.Id;
+            if (proc is null)
+            {
+                // Process.Start returns null when the OS refuses to create the
+                // process without throwing (UAC intercept, blocked executable).
+                log.Warn($"Process.Start returned null for {route.BrowserName} at \"{path}\"; {route.Reason}");
+                return null;
+            }
+
+            log.Info($"Launched {route.BrowserName} (pid={proc.Id}) for {route.Uri.OriginalString}; {route.Reason}");
+            return proc.Id;
         }
         catch (Exception ex)
         {

@@ -81,4 +81,39 @@ public class ArgsFormatterTests
         var actual = ArgsFormatter.Format(["ext+container:name=Work&url={url}"], U("https://x.com/"), "https://x.com/");
         Assert.Equal(["ext+container:name=Work&url=https://x.com/"], actual);
     }
+
+    [Fact]
+    public void Doubled_braces_emit_literal_braces()
+    {
+        // {{url}} → literal "{url}", so the browser sees a real token-looking string.
+        var actual = ArgsFormatter.Format(["--template={{url}}"], U("https://x.com/"), "https://x.com/");
+        Assert.Equal(["--template={url}"], actual);
+    }
+
+    [Fact]
+    public void Doubled_braces_around_a_known_token_stay_literal()
+    {
+        // {{url}} must NOT expand the inner token — the escape pass runs first and
+        // turns the doubled braces into single literal braces.
+        var actual = ArgsFormatter.Format(["prefix{{url}}suffix"], U("https://x.com/"), "https://x.com/");
+        Assert.Equal(["prefix{url}suffix"], actual);
+    }
+
+    [Fact]
+    public void Lone_braces_still_resolve_as_tokens()
+    {
+        // Sanity: a non-doubled single {url} is still a token, not a literal.
+        var actual = ArgsFormatter.Format(["{url}"], U("https://x.com/"), "https://x.com/");
+        Assert.Equal(["https://x.com/"], actual);
+    }
+
+    [Fact]
+    public void Doubled_braces_dont_count_as_token_seen()
+    {
+        // Important contract: a template consisting ONLY of literal braces
+        // (e.g. "{{{{}}}}") must still trigger the trailing-URL append, because
+        // no recognised token fired.
+        var actual = ArgsFormatter.Format(["{{}}"], U("https://x.com/"), "https://x.com/");
+        Assert.Equal(["{}", "https://x.com/"], actual);
+    }
 }

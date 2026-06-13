@@ -51,8 +51,19 @@ internal sealed class ToastNotifier : IDisposable
     private ushort _dispatcherClassAtom;
     private ushort _toastClassAtom;
 
+    // Cached once in MessageLoop (must run on a thread with a live HWND). Used by
+    // Reflow so a 5-toast layout only queries the DPI once, not five times.
+    private uint _dispatcherDpi;
+
     private volatile bool _started;
+
     private volatile bool _disposed;
+
+    // Set by Dispose BEFORE the queue is drained and WM_CLOSE is posted. Notify()
+    // checks this at entry so a Notify that races the Dispose can't enqueue a
+    // ShowToast for a message loop that's about to exit (the resulting HWND would
+    // never be painted or torn down cleanly).
+    private volatile bool _shuttingDown;
 
     public ToastNotifier(FileLogger log, NotifyOptions options)
     {
@@ -97,7 +108,11 @@ internal sealed class ToastNotifier : IDisposable
     /// </summary>
     public void Notify(string message)
     {
-        if (_disposed || _dispatcherHwnd == IntPtr.Zero)
+        // _shuttingDown is the FIRST gate: a Notify that races Dispose can't
+        // enqueue a ShowToast for a dispatcher that's about to close. The
+        // _dispatcherHwnd == 0 check is a backstop for the moment after the
+        // HWND has been zeroed but before _shuttingDown is observed.
+        if (_shuttingDown || _dispatcherHwnd == IntPtr.Zero)
             return;
         if (!_options.Enabled)
             return;
@@ -115,10 +130,24 @@ internal sealed class ToastNotifier : IDisposable
     {
         if (_disposed)
             return;
+
+        // Flip _shuttingDown FIRST so any concurrent Notify returns immediately
+        // and doesn't enqueue an action that the closing loop would never process.
+        // The queue drain that follows is racy with the message loop's own
+        // dequeue; ConcurrentQueue handles that, but actions that have already
+        // been dequeued and are mid-ShowToast are guarded by the same flag at the
+        // top of ShowToast.
+        _shuttingDown = true;
         _disposed = true;
 
+        // Discard any not-yet-processed InvokeMessage payloads. Items already
+        // dequeued by the loop are handled by the ShowToast-level guard.
+        while (_invokeQueue.TryDequeue(out _))
+        {
+        }
+
         // Zero the HWND BEFORE posting WM_CLOSE. Notify() checks this on entry
-        // (not just _disposed) to make the post-dispose enqueue window atomic;
+        // (not just _shuttingDown) to make the post-dispose enqueue window atomic;
         // a Notify that arrives after this line is guaranteed to see
         // _dispatcherHwnd == IntPtr.Zero and bail.
         var hwnd = Interlocked.Exchange(ref _dispatcherHwnd, IntPtr.Zero);
@@ -139,6 +168,14 @@ internal sealed class ToastNotifier : IDisposable
         {
             RegisterClasses();
             CreateDispatcherWindow();
+
+            // Cache the dispatcher's DPI once. It's the primary-monitor DPI by
+            // construction (the HWND is on a message-only parent), so it won't
+            // change while the notifier is alive. Reflow reads this field instead
+            // of re-querying on every layout pass.
+            var dpi = User32.GetDpiForWindow(_dispatcherHwnd);
+            _dispatcherDpi = dpi == 0 ? 96u : dpi;
+
             _ready.Set();
 
             while (User32.GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
@@ -271,6 +308,14 @@ internal sealed class ToastNotifier : IDisposable
 
     private void ShowToast(string message, int durationMs)
     {
+        // Defense-in-depth: even if an action slipped past the Notify gate, the
+        // closing message loop has the final say. Creating an HWND with no loop
+        // to process its messages would leak it (the GCHandle would be cleaned
+        // up by the finalizer, but the HWND itself is OS-reclaimed only at
+        // process exit).
+        if (_shuttingDown)
+            return;
+
         // Drop new toasts when the stack is already full, rather than fighting
         // for screen space.
         if (_active.Count >= MaxConcurrentToasts)
@@ -317,11 +362,10 @@ internal sealed class ToastNotifier : IDisposable
             return;
 
         var workArea = GetPrimaryWorkArea();
-        // DPI of the dispatcher window is "good enough" for the primary monitor
-        // — toasts on a different-DPI monitor will look slightly off.
-        var dpi = User32.GetDpiForWindow(_dispatcherHwnd);
-        if (dpi == 0)
-            dpi = 96;
+        // Reuse the dispatcher DPI cached at startup — querying GetDpiForWindow
+        // on every layout pass is wasted work since the value can't change for
+        // a message-only window in this process's lifetime.
+        var dpi = _dispatcherDpi == 0 ? 96u : _dispatcherDpi;
         var spacing = (int) (LogicalSpacing * dpi / 96.0);
         var margin = (int) (LogicalMargin * dpi / 96.0);
 

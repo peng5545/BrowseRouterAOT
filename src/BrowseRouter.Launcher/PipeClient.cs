@@ -87,6 +87,18 @@ internal static class PipeClient
     }
 
     /// <summary>
+    /// Describe the pipe this process would connect to (matches what
+    /// <see cref="BuildPipeName"/> computes). Cheap; safe to call before
+    /// <see cref="SendAsync"/> to log a "trying" line, or after a failed
+    /// SendAsync to log a "failed" line.
+    /// </summary>
+    public static string DescribePipe()
+    {
+        var name = BuildPipeName(out var diag);
+        return $@"\\.\pipe\{name} ({diag})";
+    }
+
+    /// <summary>
     /// Compose the per-user, per-session pipe name. Matches what Host computes.
     /// </summary>
     public static string BuildPipeName(out string diagnosticInfo)

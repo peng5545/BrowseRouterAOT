@@ -87,6 +87,22 @@ internal static class Program
             return response.Ok ? 0 : EmitFailure(url, response);
         }
 
+        // First connect failed — log the pipe name + SID/session so a misconfigured
+        // SID or a session boundary issue is diagnosable from a single console line.
+        if (!connected)
+        {
+            try
+            {
+                await Console.Error
+                    .WriteLineAsync($"{Constants.AppName}: pipe not reachable yet: {PipeClient.DescribePipe()}")
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                /* no console */
+            }
+        }
+
         // Bootstrap and retry up to a few times, with brief sleeps. Caps total
         // worst-case at ~1s so a slow Host start still feels acceptable.
         if (!HostBootstrapper.TryStart())

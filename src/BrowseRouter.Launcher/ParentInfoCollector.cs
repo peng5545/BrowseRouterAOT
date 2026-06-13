@@ -1,5 +1,6 @@
 ﻿using BrowseRouter.Launcher.Interop;
 using System.Diagnostics;
+using System.IO;
 
 namespace BrowseRouter.Launcher;
 
@@ -31,8 +32,14 @@ internal static class ParentInfoCollector
             try
             {
                 using var proc = Process.GetProcessById((int) pid);
-                processName = proc.ProcessName + (string.IsNullOrEmpty(proc.ProcessName) ? "" : ".exe");
+                // Query the image path ONCE and derive both the full path and the
+                // filename from it. Using two different sources (ProcessName for
+                // the filename, MainModule for the path) could disagree on
+                // weirdly-named processes like "node-script" or 32-char-truncated
+                // names; one source keeps processName and processPath in lock-step.
                 processPath = TryGetProcessImagePath(pid);
+                processName = processPath is not null ? Path.GetFileName(processPath) :
+                    !string.IsNullOrEmpty(proc.ProcessName) ? proc.ProcessName + ".exe" : null;
                 // MainWindowTitle is best-effort: many command-line / service parents
                 // have none, in which case we'll fall back to the foreground window.
                 windowTitle = SafeMainWindowTitle(proc);

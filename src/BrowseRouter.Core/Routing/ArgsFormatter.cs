@@ -56,6 +56,16 @@ public static class ArgsFormatter
     /// (<paramref name="tokenSeen"/>) whether any recognized token was substituted.
     /// Unknown tokens are left intact (no substitution, no scanning further).
     /// </summary>
+    /// <remarks>
+    /// Literal braces are written as <c>{{</c> and <c>}}</c>, matching the
+    /// convention used by .NET format strings. The escape is processed in a
+    /// single pass alongside token resolution so <c>{{url}}</c> emits the
+    /// literal text <c>{url}</c> and the inner "url" is NOT re-resolved as a
+    /// token. A <c>{{X}}</c> with non-empty X also counts as a "token seen"
+    /// for the trailing-URL-append decision, so <c>["--template={{url}}"]</c>
+    /// produces a single arg (the user clearly meant the placeholder to
+    /// replace the URL slot, not sit alongside it).
+    /// </remarks>
     private static string ExpandTokens(string input, Uri uri, string rawUrl, out bool tokenSeen)
     {
         tokenSeen = false;
@@ -66,36 +76,74 @@ public static class ArgsFormatter
         var i = 0;
         while (i < input.Length)
         {
-            var open = input.IndexOf('{', i);
-            if (open < 0)
+            var c = input[i];
+
+            // Escaped opening brace: look for a matching `}}` to decide whether
+            // this is a `{{X}}`-style would-be token (non-empty X) or a bare `{{`.
+            if (c == '{' && i + 1 < input.Length && input[i + 1] == '{')
             {
-                sb.Append(input, i, input.Length - i);
-                break;
+                var end = input.IndexOf("}}", i + 2, StringComparison.Ordinal);
+                if (end >= 0 && end > i + 2)
+                {
+                    // Non-empty inner: emit `{X}` literally, count as token-seen,
+                    // skip past the closing `}}`.
+                    var innerLen = end - (i + 2);
+                    sb.Append('{');
+                    sb.Append(input, i + 2, innerLen);
+                    sb.Append('}');
+                    tokenSeen = true;
+                    i = end + 2;
+                    continue;
+                }
+
+                // Bare `{{` (no `}}` follows, or empty inner `{{}}`) — emit one `{`.
+                // A truly empty `{{}}` doesn't count as token-seen; a bare `{{` at
+                // end of string doesn't either. Both fall through here.
+                sb.Append('{');
+                i += 2;
+                continue;
             }
 
-            var close = input.IndexOf('}', open + 1);
-            if (close < 0)
+            // Escaped closing brace: emit `}` literally, skip the duplicate.
+            if (c == '}' && i + 1 < input.Length && input[i + 1] == '}')
             {
-                sb.Append(input, i, input.Length - i);
-                break;
+                sb.Append('}');
+                i += 2;
+                continue;
             }
 
-            sb.Append(input, i, open - i);
-            var token = input.AsSpan(open + 1, close - open - 1);
-            var substitution = Resolve(token, uri, rawUrl);
-            if (substitution is null)
+            // Real token: `{name}`.
+            if (c == '{')
             {
-                // Unknown token — pass the original through verbatim so users see what
-                // they wrote, not a silently dropped placeholder.
-                sb.Append(input, open, close - open + 1);
-            }
-            else
-            {
-                sb.Append(substitution);
-                tokenSeen = true;
+                var close = input.IndexOf('}', i + 1);
+                if (close < 0)
+                {
+                    // Unterminated — output the rest as literal.
+                    sb.Append(input, i, input.Length - i);
+                    break;
+                }
+
+                var token = input.AsSpan(i + 1, close - i - 1);
+                var substitution = Resolve(token, uri, rawUrl);
+                if (substitution is null)
+                {
+                    // Unknown token — pass through verbatim so users see what they wrote,
+                    // not a silently dropped placeholder.
+                    sb.Append(input, i, close - i + 1);
+                }
+                else
+                {
+                    sb.Append(substitution);
+                    tokenSeen = true;
+                }
+
+                i = close + 1;
+                continue;
             }
 
-            i = close + 1;
+            // Plain character.
+            sb.Append(c);
+            i++;
         }
 
         return sb.ToString();

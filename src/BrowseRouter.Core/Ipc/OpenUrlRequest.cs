@@ -18,7 +18,10 @@ public sealed class OpenUrlRequest
     public required string Url { get; set; }
 
     /// <summary>
-    /// File name of the calling process (e.g. <c>"TEAMS.EXE"</c>), or null.
+    /// File name (with <c>.exe</c> extension) of the calling process
+    /// (e.g. <c>"TEAMS.EXE"</c>), or null. Computed from the calling process's
+    /// image path on the Launcher side, so the value matches what
+    /// <see cref="SourceProcessPath"/> points at.
     /// </summary>
     public string? SourceProcessName { get; set; }
 
