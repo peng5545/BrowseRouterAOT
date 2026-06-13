@@ -1,5 +1,6 @@
 ﻿using BrowseRouter.Core;
 using BrowseRouter.Core.Config;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -108,10 +109,10 @@ internal sealed class FileLogger(LogOptions? options = null) : IDisposable
                 // _writer is guaranteed non-null here: the if-block above
                 // either skipped (meaning it was already non-null) or entered
                 // and assigned a fresh one via TryOpenWriterLocked.
-                _writer!.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {msg}");
+                _writer.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {msg}");
                 // AutoFlush so an unexpected process death loses at most the
                 // tail of the in-flight line, not a full buffer's worth.
-                _writer!.Flush();
+                _writer.Flush();
             }
             catch
             {
@@ -124,7 +125,12 @@ internal sealed class FileLogger(LogOptions? options = null) : IDisposable
         }
     }
 
-    private static bool TryOpenWriterLocked(string dir, string date, out StreamWriter? writer, out string path)
+    private static bool TryOpenWriterLocked(
+        string dir,
+        string date,
+        [NotNullWhen(true)] out StreamWriter? writer,
+        out string path
+    )
     {
         writer = null;
         // Suffix the log filename with the current session id so two concurrent

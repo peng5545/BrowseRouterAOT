@@ -108,7 +108,7 @@ public sealed class RootConfig
     /// </summary>
     public List<string> Validate()
     {
-        var warnings = new List<string>();
+        List<string> warnings = [];
 
         if (DefaultBrowser != null && !Browsers.ContainsKey(DefaultBrowser))
         {
@@ -123,23 +123,13 @@ public sealed class RootConfig
 
         // Rules / SourceRules are guaranteed non-null by the JsonConstructor
         // (defaulting to [] on the way in), so a straight foreach is safe.
-        foreach (var rule in Rules)
-        {
-            if (!Browsers.ContainsKey(rule.Browser))
-            {
-                warnings.Add(
-                    $"URL rule matches '{RuleEngine.DescribeRule(rule)}' but references undefined browser '{rule.Browser}'.");
-            }
-        }
+        warnings.AddRange(Rules.Where(rule => !Browsers.ContainsKey(rule.Browser))
+            .Select(rule =>
+                $"URL rule matches '{RuleEngine.DescribeRule(rule)}' but references undefined browser '{rule.Browser}'."));
 
-        foreach (var rule in SourceRules)
-        {
-            if (!Browsers.ContainsKey(rule.Browser))
-            {
-                warnings.Add(
-                    $"Source rule matches '{RuleEngine.DescribeSource(rule.Match)}' but references undefined browser '{rule.Browser}'.");
-            }
-        }
+        warnings.AddRange(SourceRules.Where(rule => !Browsers.ContainsKey(rule.Browser))
+            .Select(rule =>
+                $"Source rule matches '{RuleEngine.DescribeSource(rule.Match)}' but references undefined browser '{rule.Browser}'."));
 
         return warnings;
     }

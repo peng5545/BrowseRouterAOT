@@ -23,8 +23,7 @@ internal static class ConfigPaths
     /// Path to the template config shipped next to the Host executable.
     /// Copied to <see cref="ConfigFile"/> on first run if the user has no config yet.
     /// </summary>
-    public static string TemplateConfigFile =>
-        Path.Combine(AppContext.BaseDirectory, "browsers.template.json");
+    public static string TemplateConfigFile => Path.Combine(AppContext.BaseDirectory, "browsers.template.json");
 
     /// <summary>
     /// Ensure the config directory exists. Idempotent.

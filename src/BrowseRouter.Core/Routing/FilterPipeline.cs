@@ -21,19 +21,13 @@ namespace BrowseRouter.Core.Routing;
 public static partial class FilterPipeline
 {
     /// <summary>
-    /// Matches <c>unescape($N)</c> macros inside a replacement template.
+    /// Combined pattern: matches either <c>unescape($N)</c> or plain <c>$N</c>
+    /// in a single pass, avoiding two sequential regex replacements on the
+    /// template string.
+    /// Group 1 = captured <c>$N</c> inside unescape, Group 2 = plain <c>$N</c>.
     /// </summary>
-    [GeneratedRegex(@"unescape\(\$(\d+)\)", RegexOptions.CultureInvariant)]
-    private static partial Regex UnescapeMacroRegex();
-
-    /// <summary>
-    /// Matches plain <c>$N</c> group references inside a replacement template.
-    /// </summary>
-    [GeneratedRegex(@"\$(\d+)", RegexOptions.CultureInvariant)]
-    private static partial Regex GroupReferenceRegex();
-
-    private static readonly Regex UnescapeMacro = UnescapeMacroRegex();
-    private static readonly Regex GroupRef = GroupReferenceRegex();
+    [GeneratedRegex(@"unescape\(\$(\d+)\)|\$(\d+)", RegexOptions.CultureInvariant)]
+    private static partial Regex CombinedReplaceRegex();
 
     /// <summary>
     /// Try to apply filters; returns true (and sets <paramref name="output"/> to the
@@ -100,21 +94,28 @@ public static partial class FilterPipeline
     }
 
     /// <summary>
-    /// Expand <c>unescape($N)</c> first (so a literal <c>$1</c> inside the unescaped
-    /// payload isn't re-interpreted), then plain <c>$N</c>.
+    /// Expand <c>unescape($N)</c> and <c>$N</c> in a single pass using the
+    /// combined regex. Group 1 = unescape($N) captured group number,
+    /// Group 2 = plain $N. This avoids running two separate regex replacements
+    /// on the template per URL click.
     /// </summary>
     private static string ExpandReplacement(string template, Match match)
     {
-        var afterUnescape = UnescapeMacro.Replace(template, m =>
-        {
-            var n = int.Parse(m.Groups[1].ValueSpan, System.Globalization.CultureInfo.InvariantCulture);
-            return n < match.Groups.Count ? System.Net.WebUtility.UrlDecode(match.Groups[n].Value) : string.Empty;
-        });
+        return CombinedReplaceRegex()
+            .Replace(template, m =>
+            {
+                if (m.Groups[1].Success)
+                {
+                    // unescape($N) — URL-decode the captured group.
+                    var n = int.Parse(m.Groups[1].ValueSpan, System.Globalization.CultureInfo.InvariantCulture);
+                    return n < match.Groups.Count
+                        ? System.Net.WebUtility.UrlDecode(match.Groups[n].Value)
+                        : string.Empty;
+                }
 
-        return GroupRef.Replace(afterUnescape, m =>
-        {
-            var n = int.Parse(m.Groups[1].ValueSpan, System.Globalization.CultureInfo.InvariantCulture);
-            return n < match.Groups.Count ? match.Groups[n].Value : string.Empty;
-        });
+                // Plain $N — verbatim group reference.
+                var n2 = int.Parse(m.Groups[2].ValueSpan, System.Globalization.CultureInfo.InvariantCulture);
+                return n2 < match.Groups.Count ? match.Groups[n2].Value : string.Empty;
+            });
     }
 }

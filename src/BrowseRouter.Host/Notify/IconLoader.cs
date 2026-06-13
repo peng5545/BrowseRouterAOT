@@ -15,7 +15,9 @@ internal static class IconLoader
 {
     private const string ResourceName = "BrowseRouter.Host.Resources.icon.png";
 
-    /// <summary>Magic version constant required by <c>CreateIconFromResourceEx</c>.</summary>
+    /// <summary>
+    /// Magic version constant required by <c>CreateIconFromResourceEx</c>.
+    /// </summary>
     private const uint IconResourceVersion = 0x00030000;
 
     /// <summary>

@@ -204,7 +204,7 @@ internal sealed class PipeServer(
         Task[] toAwait;
         lock (_inFlight)
         {
-            toAwait = _inFlight.ToArray();
+            toAwait = [.. _inFlight];
         }
 
         if (toAwait.Length > 0)

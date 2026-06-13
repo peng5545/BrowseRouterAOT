@@ -323,7 +323,7 @@ internal static class Program
                       throw new InvalidOperationException(
                           "Environment.ProcessPath is null — cannot resolve self path.");
         var hostDir = Path.GetDirectoryName(hostExe) ??
-                      throw new InvalidOperationException("Self path has no directory component: " + hostExe);
+                      throw new InvalidOperationException($"Self path has no directory component: {hostExe}");
         var launcherExe = Path.Combine(hostDir, "BrowseRouter.Launcher.exe");
         return (hostExe, launcherExe);
     }

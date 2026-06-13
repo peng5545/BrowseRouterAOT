@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.IO;
 using System.Text;
@@ -44,6 +45,8 @@ public static class PipeProtocol
     /// Read a length-prefixed JSON message from <paramref name="stream"/> and
     /// deserialise it via <paramref name="typeInfo"/>. Returns <c>null</c> if the
     /// peer closed the pipe before sending a complete message.
+    /// Body buffer is rented from <see cref="ArrayPool{T}"/> to reduce allocation
+    /// pressure on the per-click hot path.
     /// </summary>
     public static async Task<T?> ReadAsync<T>(Stream stream, JsonTypeInfo<T> typeInfo, CancellationToken ct)
         where T : class
@@ -56,22 +59,32 @@ public static class PipeProtocol
         if (length is <= 0 or > MaxMessageBytes)
             throw new InvalidOperationException($"Invalid pipe message length: {length}.");
 
-        var body = new byte[length];
-        if (!await ReadExactAsync(stream, body, ct).ConfigureAwait(false))
-            return null;
-        return JsonSerializer.Deserialize(body, typeInfo);
+        // Rent from pool instead of allocating a new byte[] per request.
+        // Most requests are small URLs, so pool reuse is efficient.
+        var body = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            if (!await ReadExactAsync(stream, body.AsMemory(0, length), ct).ConfigureAwait(false))
+                return null;
+            return JsonSerializer.Deserialize(body.AsSpan(0, length), typeInfo);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(body);
+        }
     }
 
     /// <summary>
     /// Read exactly <c>buffer.Length</c> bytes from <paramref name="stream"/>; returns
     /// false on premature EOF (the caller should treat this as a clean disconnect).
+    /// Accepts <see cref="Memory{T}"/> so callers can pass pooled or stack-backed buffers.
     /// </summary>
-    private static async Task<bool> ReadExactAsync(Stream stream, byte[] buffer, CancellationToken ct)
+    private static async Task<bool> ReadExactAsync(Stream stream, Memory<byte> buffer, CancellationToken ct)
     {
         var offset = 0;
         while (offset < buffer.Length)
         {
-            var read = await stream.ReadAsync(buffer.AsMemory(offset), ct).ConfigureAwait(false);
+            var read = await stream.ReadAsync(buffer[offset..], ct).ConfigureAwait(false);
             if (read == 0)
                 return false;
             offset += read;
