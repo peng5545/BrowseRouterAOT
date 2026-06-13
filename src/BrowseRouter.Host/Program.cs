@@ -129,8 +129,11 @@ internal static class Program
         using var watcher = new ConfigWatcher(store, log, onReload: host.OnConfigReload);
         watcher.Start();
 
-        // 6) Pipe server — the heart of the daemon.
-        var pipeName = PipeProtocol.BuildPipeName(store.Current.Host.PipeName ?? Constants.PipeBaseName,
+        // 6) Pipe server — the heart of the daemon. The pipe name is intentionally
+        // not user-overridable: the Launcher always looks for the default
+        // Constants.PipeBaseName, so a custom name here would silently break click
+        // routing. Pipe scoping by SID + session is still per-user/per-session.
+        var pipeName = PipeProtocol.BuildPipeName(Constants.PipeBaseName,
             System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value ?? "anon",
             Kernel32.GetCurrentSessionId());
 
@@ -162,7 +165,7 @@ internal static class Program
 
     private static int Register()
     {
-        var log = new FileLogger();
+        using var log = new FileLogger();
         var (hostExe, launcherExe) = ResolveExePaths();
         if (!File.Exists(launcherExe))
         {
@@ -182,7 +185,7 @@ internal static class Program
 
     private static int Unregister()
     {
-        var log = new FileLogger();
+        using var log = new FileLogger();
         new BrowserRegistration(log).Unregister();
         new AutoStart(log).Disable();
         Console.WriteLine(
@@ -203,20 +206,19 @@ internal static class Program
 
     private static string? ReadExistingOpenCommand()
     {
-        // Probe HKCU\SOFTWARE\Classes\BrowseRouterAOTURL\shell\open\command's default value.
-        // Done via the same advapi32 wrappers; lazy, single-shot read.
+        // Probe HKCU\SOFTWARE\Classes\{AppId}URL\shell\open\command's default value.
+        // Returned verbatim so AutoToggle() can compare it against the expected command
+        // — if a previous install pointed at a different launcher path (moved binary,
+        // partial cleanup, etc.), the comparison falls through to Register() instead of
+        // mistakenly Unregister()ing based on mere key existence.
         const string keyPath = $@"SOFTWARE\Classes\{Constants.AppId}URL\shell\open\command";
 
         AdvApi32.SafeRegistryHandle? key = null;
         try
         {
-            return AdvApi32.RegOpenKeyEx(AdvApi32.HkeyCurrentUser, keyPath, 0, AdvApi32.KeyRead, out key) != 0
-                ? null
-                :
-                // Not implementing RegQueryValueEx here — we only need a yes/no decision and
-                // anything non-trivial routes through Register/Unregister anyway. Return a
-                // non-null sentinel so existence triggers Unregister().
-                "<present>";
+            if (AdvApi32.RegOpenKeyEx(AdvApi32.HkeyCurrentUser, keyPath, 0, AdvApi32.KeyRead, out key) != 0)
+                return null;
+            return AdvApi32.ReadStringValue(key, string.Empty);
         }
         finally
         {

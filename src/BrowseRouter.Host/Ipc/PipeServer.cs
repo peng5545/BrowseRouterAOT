@@ -23,13 +23,15 @@ internal sealed class PipeServer(
 {
     private CancellationTokenSource? _cts;
     private Task? _loop;
+    private int _started; // 0 = not started, 1 = started. Interlocked gate.
 
     /// <summary>
     /// Begin listening. Returns immediately; the loop runs in the background.
+    /// Idempotent under concurrent calls — only the first wins.
     /// </summary>
     public void Start()
     {
-        if (_loop is not null)
+        if (Interlocked.CompareExchange(ref _started, 1, 0) != 0)
             return;
         _cts = new CancellationTokenSource();
         _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));

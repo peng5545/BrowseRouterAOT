@@ -97,11 +97,6 @@ internal static class PipeClient
 
         diagnosticInfo = $"sid={sid}, sess={sessionId}";
 
-        // For simplicity and speed in the Launcher AOT, we use the default pipe name.
-        // If a user overrides this in config, they should ideally keep it default
-        // or we'd need a more robust shared discovery.
-        const string pipeBase = Constants.PipeBaseName;
-
-        return PipeProtocol.BuildPipeName(pipeBase, sid, sessionId);
+        return PipeProtocol.BuildPipeName(Constants.PipeBaseName, sid, sessionId);
     }
 }

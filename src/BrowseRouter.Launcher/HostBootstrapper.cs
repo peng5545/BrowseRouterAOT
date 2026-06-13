@@ -30,7 +30,8 @@ internal static class HostBootstrapper
     /// <summary>
     /// Fire-and-forget Process.Start of the Host. The new process is fully
     /// detached: no stdio redirect, no window. Returns false only when the exe
-    /// cannot be located or Process.Start throws immediately.
+    /// cannot be located, Process.Start throws immediately, or returns null
+    /// (which can happen on UAC intercept / blocked executable without throwing).
     /// </summary>
     public static bool TryStart()
     {
@@ -52,8 +53,8 @@ internal static class HostBootstrapper
                                    throw new InvalidOperationException("Resolved Host exe has no directory component: " + exe),
             };
             psi.ArgumentList.Add("--host");
-            using var _ = Process.Start(psi);
-            return true;
+            using var proc = Process.Start(psi);
+            return proc is not null;
         }
         catch
         {

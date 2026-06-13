@@ -25,7 +25,7 @@ internal static class SettingsLauncher
                 UseShellExecute = true
             });
         }
-        catch
+        catch (Exception ex)
         {
             // Some locked-down systems disable ms-settings: — fall back to the bare URI.
             try
@@ -33,9 +33,13 @@ internal static class SettingsLauncher
                 using var __ = Process.Start(new ProcessStartInfo
                     { FileName = "ms-settings:defaultapps", UseShellExecute = true });
             }
-            catch
+            catch (Exception inner)
             {
-                /* nothing more we can do */
+                // Both attempts failed — at least log so the user/operator can see
+                // why nothing visibly happened. Goes to the existing FileLogger
+                // that Program.cs already constructed.
+                Logging.FileLogger.TryLogConsole(
+                    $"{Constants.AppName}: could not open Default Apps: {inner.Message} (initial: {ex.Message})");
             }
         }
     }

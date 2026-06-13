@@ -6,12 +6,6 @@
 public sealed class HostOptions
 {
     /// <summary>
-    /// Optional override for the pipe base name. Default is
-    /// <see cref="Constants.PipeBaseName"/>. Useful for side-by-side test runs.
-    /// </summary>
-    public string? PipeName { get; set; }
-
-    /// <summary>
     /// If &gt; 0, the Host shuts itself down after this many minutes of pipe inactivity.
     /// 0 (default) = never auto-shut. Launcher will simply re-bootstrap on next click.
     /// </summary>

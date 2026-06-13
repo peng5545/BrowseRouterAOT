@@ -201,10 +201,6 @@ internal static partial class User32
     // SystemParametersInfo uiAction
     public const uint SpiGetworkarea = 0x0030;
 
-    // AnimateWindow flags
-    public const uint AwHide = 0x10000;
-    public const uint AwBlend = 0x80000;
-
     // DrawText format flags
     public const uint DtLeft = 0x00000000;
     public const uint DtTop = 0x00000000;
@@ -265,10 +261,6 @@ internal static partial class User32
         uint uFlags
     );
 
-    [LibraryImport("user32.dll", EntryPoint = "ShowWindow")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
     /// <summary>
     /// Win10 1607+: per-monitor DPI for the given window. Falls back to system DPI
     /// for earlier versions — but the manifest declares PerMonitorV2, so this is
@@ -280,10 +272,6 @@ internal static partial class User32
     [LibraryImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool SystemParametersInfo(uint uiAction, uint uiParam, ref Rect pvParam, uint fWinIni);
-
-    [LibraryImport("user32.dll", EntryPoint = "AnimateWindow", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool AnimateWindow(IntPtr hWnd, uint dwTime, uint dwFlags);
 
     [LibraryImport("user32.dll", EntryPoint = "SetTimer", SetLastError = true)]
     public static partial UIntPtr SetTimer(IntPtr hWnd, UIntPtr nIdEvent, uint uElapse, IntPtr lpTimerFunc);
@@ -317,9 +305,6 @@ internal static partial class User32
 
     [LibraryImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     public static partial IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-
-    [LibraryImport("user32.dll", EntryPoint = "GetSystemMetricsForDpi")]
-    public static partial int GetSystemMetricsForDpi(int nIndex, uint dpi);
 
     [LibraryImport("user32.dll", EntryPoint = "GetSystemMetrics")]
     public static partial int GetSystemMetrics(int nIndex);

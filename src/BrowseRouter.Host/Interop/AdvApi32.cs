@@ -74,6 +74,16 @@ internal static partial class AdvApi32
         uint cbData
     );
 
+    [LibraryImport("advapi32.dll", EntryPoint = "RegQueryValueExW")]
+    public static partial int RegQueryValueEx(
+        SafeRegistryHandle hKey,
+        [MarshalAs(UnmanagedType.LPWStr)] string? lpValueName,
+        IntPtr lpReserved,
+        out uint lpType,
+        [Out] byte[] lpData,
+        ref uint lpcbData
+    );
+
     [LibraryImport("advapi32.dll", EntryPoint = "RegDeleteValueW", StringMarshalling = StringMarshalling.Utf16)]
     public static partial int RegDeleteValue(SafeRegistryHandle hKey, string lpValueName);
 
@@ -92,6 +102,22 @@ internal static partial class AdvApi32
         // RegSetValueExW takes a byte buffer; need to encode the string + trailing NUL.
         var bytes = System.Text.Encoding.Unicode.GetBytes(value + '\0');
         return RegSetValueEx(key, name, 0, type, bytes, (uint) bytes.Length);
+    }
+
+    /// <summary>
+    /// Read a REG_SZ / REG_EXPAND_SZ value. Returns null if missing, wrong type,
+    /// the buffer is too small, or any other failure. Buffer is fixed-size:
+    /// 2048 bytes (1024 chars) is well over any realistic <c>%1</c> command line.
+    /// </summary>
+    public static string? ReadStringValue(SafeRegistryHandle key, string name)
+    {
+        var buf = new byte[2048];
+        var cb = (uint) buf.Length;
+        var rc = RegQueryValueEx(key, name, IntPtr.Zero, out var type, buf, ref cb);
+        if (rc != 0 || (type != RegSz && type != RegExpandSz))
+            return null;
+        // cb holds bytes written including the trailing NUL; strip it.
+        return cb < 2 ? string.Empty : System.Text.Encoding.Unicode.GetString(buf, 0, (int) (cb - 2));
     }
 
     /// <summary>

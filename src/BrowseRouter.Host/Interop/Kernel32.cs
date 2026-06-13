@@ -14,12 +14,6 @@ internal static partial class Kernel32
         SetLastError = true)]
     public static partial IntPtr GetModuleHandle(string? lpModuleName);
 
-    /// <summary>
-    /// WTS API: returns the session id of the active console session.
-    /// </summary>
-    [LibraryImport("kernel32.dll")]
-    public static partial uint WTSGetActiveConsoleSessionId();
-
     [LibraryImport("kernel32.dll")]
     public static partial uint GetCurrentProcessId();
 

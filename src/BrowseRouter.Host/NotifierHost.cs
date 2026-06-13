@@ -125,12 +125,9 @@ internal sealed class NotifierHost(
                 try
                 {
                     var appDir = AppContext.BaseDirectory;
-                    using var _ = Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "explorer.exe",
-                        Arguments = appDir,
-                        UseShellExecute = false
-                    });
+                    var psi = new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = false };
+                    psi.ArgumentList.Add(appDir);
+                    using var _ = Process.Start(psi);
                 }
                 catch (Exception ex)
                 {
@@ -145,12 +142,9 @@ internal sealed class NotifierHost(
                 try
                 {
                     Directory.CreateDirectory(Constants.DefaultLogDirectory);
-                    using var _ = Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "explorer.exe",
-                        Arguments = Constants.DefaultLogDirectory,
-                        UseShellExecute = false
-                    });
+                    var psi = new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = false };
+                    psi.ArgumentList.Add(Constants.DefaultLogDirectory);
+                    using var _ = Process.Start(psi);
                 }
                 catch (Exception ex)
                 {

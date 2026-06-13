@@ -117,9 +117,14 @@ internal sealed class ToastNotifier : IDisposable
             return;
         _disposed = true;
 
-        if (_dispatcherHwnd != IntPtr.Zero)
+        // Zero the HWND BEFORE posting WM_CLOSE. Notify() checks this on entry
+        // (not just _disposed) to make the post-dispose enqueue window atomic;
+        // a Notify that arrives after this line is guaranteed to see
+        // _dispatcherHwnd == IntPtr.Zero and bail.
+        var hwnd = Interlocked.Exchange(ref _dispatcherHwnd, IntPtr.Zero);
+        if (hwnd != IntPtr.Zero)
         {
-            User32.PostMessage(_dispatcherHwnd, User32.WmClose, IntPtr.Zero, IntPtr.Zero);
+            User32.PostMessage(hwnd, User32.WmClose, IntPtr.Zero, IntPtr.Zero);
         }
 
         _thread?.Join(TimeSpan.FromSeconds(2));

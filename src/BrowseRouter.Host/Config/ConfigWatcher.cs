@@ -31,7 +31,8 @@ internal sealed class ConfigWatcher : IDisposable
         // ConfigFile is a fully qualified path under %AppData% that always has a
         // parent directory on Windows; the throw is a type-system assertion.
         var dir = Path.GetDirectoryName(ConfigPaths.ConfigFile) ??
-                  throw new InvalidOperationException("Config file path has no directory component: " + ConfigPaths.ConfigFile);
+                  throw new InvalidOperationException(
+                      $"Config file path has no directory component: {ConfigPaths.ConfigFile}");
         var file = Path.GetFileName(ConfigPaths.ConfigFile);
 
         _fsw = new FileSystemWatcher(dir, file)
@@ -85,8 +86,11 @@ internal sealed class ConfigWatcher : IDisposable
         {
             await Task.Delay(DebounceWindow, ct).ConfigureAwait(false);
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException)
         {
+            // Covers both TaskCanceledException (token fired) and the
+            // ObjectDisposedException that Task.Delay raises if the CTS is
+            // disposed mid-wait (e.g. watcher torn down during the debounce).
             return;
         }
 
