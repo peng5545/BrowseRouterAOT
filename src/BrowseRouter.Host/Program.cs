@@ -251,7 +251,7 @@ internal static class Program
             firstToken = end < 0 ? span : span[..end];
         }
 
-        var cmp = StringComparison.OrdinalIgnoreCase;
+        const StringComparison cmp = StringComparison.OrdinalIgnoreCase;
         return firstToken.Equals(launcherExe, cmp) || firstToken.Equals(Path.GetFileName(launcherExe), cmp);
     }
 
@@ -267,9 +267,9 @@ internal static class Program
         AdvApi32.SafeRegistryHandle? key = null;
         try
         {
-            if (AdvApi32.RegOpenKeyEx(AdvApi32.HkeyCurrentUser, keyPath, 0, AdvApi32.KeyRead, out key) != 0)
-                return null;
-            return AdvApi32.ReadStringValue(key, string.Empty);
+            return AdvApi32.RegOpenKeyEx(AdvApi32.HkeyCurrentUser, keyPath, 0, AdvApi32.KeyRead, out key) != 0
+                ? null
+                : AdvApi32.ReadStringValue(key, string.Empty);
         }
         finally
         {

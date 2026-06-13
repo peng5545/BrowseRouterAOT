@@ -158,9 +158,11 @@ public class RootConfigTests
         var warnings = cfg.Validate();
 
         Assert.Equal(2, warnings.Count);
-        Assert.Contains(warnings, w => w.Contains("hostSuffix=example.com", StringComparison.Ordinal)
-                                       && w.Contains("URL rule", StringComparison.Ordinal));
-        Assert.Contains(warnings, w => w.Contains("process=TEAMS.EXE", StringComparison.Ordinal)
-                                       && w.Contains("Source rule", StringComparison.Ordinal));
+        Assert.Contains(warnings,
+            w => w.Contains("hostSuffix=example.com", StringComparison.Ordinal) &&
+                 w.Contains("URL rule", StringComparison.Ordinal));
+        Assert.Contains(warnings,
+            w => w.Contains("process=TEAMS.EXE", StringComparison.Ordinal) &&
+                 w.Contains("Source rule", StringComparison.Ordinal));
     }
 }

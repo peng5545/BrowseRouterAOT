@@ -166,7 +166,7 @@ public sealed class RegexMatch : MatchDef
     /// <summary>
     /// The regular expression to apply to the full URL. Required.
     /// </summary>
-    public required string Value { get; set; } = "";
+    public required string Value { get; set; } = string.Empty;
 
     /// <summary>
     /// STJ uses the parameterless ctor + property setters; we initialise the

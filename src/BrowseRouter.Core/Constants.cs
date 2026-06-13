@@ -52,12 +52,10 @@ public static class Constants
     /// <summary>
     /// Full path to the config file under <see cref="AppDataDirectory"/>.
     /// </summary>
-    public static string DefaultConfigFilePath =>
-        Path.Combine(AppDataDirectory, ConfigFileName);
+    public static string DefaultConfigFilePath => Path.Combine(AppDataDirectory, ConfigFileName);
 
     /// <summary>
     /// Default log directory under <see cref="LocalAppDataDirectory"/>.
     /// </summary>
-    public static string DefaultLogDirectory =>
-        Path.Combine(LocalAppDataDirectory, "logs");
+    public static string DefaultLogDirectory => Path.Combine(LocalAppDataDirectory, "logs");
 }

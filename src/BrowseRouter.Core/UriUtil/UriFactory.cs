@@ -67,7 +67,7 @@ public static class UriFactory
     /// </summary>
     private static bool TryExtractScheme(string input, out string scheme)
     {
-        scheme = "";
+        scheme = string.Empty;
         if (input.Length == 0)
             return false;
         var first = input[0];
@@ -91,14 +91,12 @@ public static class UriFactory
         return false;
     }
 
-    private static bool IsAsciiAlpha(char c) => c is >= 'A' and <= 'Z' || c is >= 'a' and <= 'z';
+    private static bool IsAsciiAlpha(char c) => c is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
 
     private static bool IsAsciiSchemeChar(char c) =>
         IsAsciiAlpha(c) || c is >= '0' and <= '9' || c == '+' || c == '-' || c == '.';
 
-    private static bool IsWebSchemeName(string scheme) =>
-        scheme is "HTTP" or "HTTPS";
+    private static bool IsWebSchemeName(string scheme) => scheme is "HTTP" or "HTTPS";
 
-    private static bool IsWebScheme(Uri uri) =>
-        uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
+    private static bool IsWebScheme(Uri uri) => uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
 }

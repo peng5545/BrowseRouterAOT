@@ -129,8 +129,7 @@ public class ConfigSerializationTests
         Assert.NotNull(cfg);
         Assert.False(cfg.Host.EnableTrayIcon);
 
-        var round = JsonSerializer.Deserialize(
-            JsonSerializer.Serialize(cfg, AppJsonContext.Default.RootConfig),
+        var round = JsonSerializer.Deserialize(JsonSerializer.Serialize(cfg, AppJsonContext.Default.RootConfig),
             AppJsonContext.Default.RootConfig);
         Assert.False(round!.Host.EnableTrayIcon);
     }
@@ -145,8 +144,7 @@ public class ConfigSerializationTests
         Assert.True(cfg.Notify.Enabled);
         Assert.Equal(5000, cfg.Notify.DurationMs);
 
-        var round = JsonSerializer.Deserialize(
-            JsonSerializer.Serialize(cfg, AppJsonContext.Default.RootConfig),
+        var round = JsonSerializer.Deserialize(JsonSerializer.Serialize(cfg, AppJsonContext.Default.RootConfig),
             AppJsonContext.Default.RootConfig);
         Assert.Equal(5000, round!.Notify.DurationMs);
     }

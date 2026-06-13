@@ -48,8 +48,7 @@ public class OpenUrlRequestTests
     public void Missing_url_in_json_payload_throws_during_deserialization()
     {
         const string payload = """{"type": "openUrl"}""";
-        Assert.ThrowsAny<Exception>(() =>
-            JsonSerializer.Deserialize(payload, AppJsonContext.Default.OpenUrlRequest));
+        Assert.ThrowsAny<Exception>(() => JsonSerializer.Deserialize(payload, AppJsonContext.Default.OpenUrlRequest));
     }
 
     [Fact]
@@ -67,7 +66,7 @@ public class OpenUrlRequestTests
                                """;
         var req = JsonSerializer.Deserialize<OpenUrlRequest>(payload, AppJsonContext.Default.OpenUrlRequest);
         Assert.NotNull(req);
-        Assert.Equal("https://example.com/x", req!.Url);
+        Assert.Equal("https://example.com/x", req.Url);
         Assert.Equal("TEAMS.EXE", req.SourceProcessName);
         Assert.Equal(1234, req.SourcePid);
         Assert.Equal(5678, req.LauncherPid);

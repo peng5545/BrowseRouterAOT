@@ -112,38 +112,38 @@ public static class ArgsFormatter
         {
             var c = input[i];
 
-            // Escaped opening brace: look for a matching `}}` to decide whether
-            // this is a `{{X}}`-style would-be token (non-empty X) or a bare `{{`.
-            if (c == '{' && i + 1 < input.Length && input[i + 1] == '{')
+            switch (c)
             {
-                var end = input.IndexOf("}}", i + 2, StringComparison.Ordinal);
-                if (end >= 0 && end > i + 2)
+                // Escaped opening brace: look for a matching `}}` to decide whether
+                // this is a `{{X}}`-style would-be token (non-empty X) or a bare `{{`.
+                case '{' when i + 1 < input.Length && input[i + 1] == '{':
                 {
-                    // Non-empty inner: emit `{X}` literally, count as token-seen,
-                    // skip past the closing `}}`.
-                    var innerLen = end - (i + 2);
+                    var end = input.IndexOf("}}", i + 2, StringComparison.Ordinal);
+                    if (end >= 0 && end > i + 2)
+                    {
+                        // Non-empty inner: emit `{X}` literally, count as token-seen,
+                        // skip past the closing `}}`.
+                        var innerLen = end - (i + 2);
+                        sb.Append('{');
+                        sb.Append(input, i + 2, innerLen);
+                        sb.Append('}');
+                        tokenSeen = true;
+                        i = end + 2;
+                        continue;
+                    }
+
+                    // Bare `{{` (no `}}` follows, or empty inner `{{}}`) — emit one `{`.
+                    // A truly empty `{{}}` doesn't count as token-seen; a bare `{{` at
+                    // end of string doesn't either. Both fall through here.
                     sb.Append('{');
-                    sb.Append(input, i + 2, innerLen);
-                    sb.Append('}');
-                    tokenSeen = true;
-                    i = end + 2;
+                    i += 2;
                     continue;
                 }
-
-                // Bare `{{` (no `}}` follows, or empty inner `{{}}`) — emit one `{`.
-                // A truly empty `{{}}` doesn't count as token-seen; a bare `{{` at
-                // end of string doesn't either. Both fall through here.
-                sb.Append('{');
-                i += 2;
-                continue;
-            }
-
-            // Escaped closing brace: emit `}` literally, skip the duplicate.
-            if (c == '}' && i + 1 < input.Length && input[i + 1] == '}')
-            {
-                sb.Append('}');
-                i += 2;
-                continue;
+                // Escaped closing brace: emit `}` literally, skip the duplicate.
+                case '}' when i + 1 < input.Length && input[i + 1] == '}':
+                    sb.Append('}');
+                    i += 2;
+                    continue;
             }
 
             // Real token: `{name}`.

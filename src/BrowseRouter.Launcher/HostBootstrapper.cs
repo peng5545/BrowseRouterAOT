@@ -50,7 +50,8 @@ internal static class HostBootstrapper
                 // is non-null (see the early-return in that method), so exe is a
                 // rooted file path with a parent directory.
                 WorkingDirectory = Path.GetDirectoryName(exe) ??
-                                   throw new InvalidOperationException("Resolved Host exe has no directory component: " + exe),
+                                   throw new InvalidOperationException(
+                                       $"Resolved Host exe has no directory component: {exe}"),
             };
             psi.ArgumentList.Add("--host");
             using var proc = Process.Start(psi);

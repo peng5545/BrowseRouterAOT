@@ -103,7 +103,7 @@ public sealed class WindowTitleRegexMatch : SourceMatchDef
     /// <summary>
     /// The regex pattern. Required.
     /// </summary>
-    public required string Value { get; set; } = "";
+    public required string Value { get; set; } = string.Empty;
 
     public WindowTitleRegexMatch()
     {

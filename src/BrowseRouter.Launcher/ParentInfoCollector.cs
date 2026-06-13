@@ -103,7 +103,7 @@ internal static class ParentInfoCollector
             unsafe
             {
                 Span<char> buf = stackalloc char[1024];
-                uint size = (uint) buf.Length;
+                var size = (uint) buf.Length;
                 fixed (char* p = buf)
                 {
                     if (!Kernel32.QueryFullProcessImageName(h, 0, p, ref size))

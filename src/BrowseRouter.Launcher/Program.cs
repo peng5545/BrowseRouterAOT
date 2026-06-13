@@ -40,7 +40,7 @@ internal static class Program
 
         // Process every argument that looks like a URL. Original BrowseRouter
         // allowed `BrowseRouter foo.com bar.com` to open both — preserved.
-        int exitCode = 0;
+        var exitCode = 0;
         foreach (var raw in args)
         {
             var url = StripOptionDashes(raw);
@@ -111,25 +111,25 @@ internal static class Program
 
         // First attempt: maybe Host is already up.
         var (connected, response) = await PipeClient.SendAsync(req, ct.Token).ConfigureAwait(false);
-        if (connected && response is not null)
+        switch (connected)
         {
-            return response.Ok ? 0 : EmitFailure(url, response);
-        }
+            case true when response is not null:
+                return response.Ok ? 0 : EmitFailure(url, response);
+            // First connect failed — log the pipe name + SID/session so a misconfigured
+            // SID or a session boundary issue is diagnosable from a single console line.
+            case false:
+                try
+                {
+                    await Console.Error
+                        .WriteLineAsync($"{Constants.AppName}: pipe not reachable yet: {PipeClient.DescribePipe()}")
+                        .ConfigureAwait(false);
+                }
+                catch
+                {
+                    /* no console */
+                }
 
-        // First connect failed — log the pipe name + SID/session so a misconfigured
-        // SID or a session boundary issue is diagnosable from a single console line.
-        if (!connected)
-        {
-            try
-            {
-                await Console.Error
-                    .WriteLineAsync($"{Constants.AppName}: pipe not reachable yet: {PipeClient.DescribePipe()}")
-                    .ConfigureAwait(false);
-            }
-            catch
-            {
-                /* no console */
-            }
+                break;
         }
 
         // Bootstrap a new Host and retry with exponential backoff. The previous

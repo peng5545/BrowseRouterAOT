@@ -35,7 +35,7 @@ internal static partial class User32
         if (len <= 0)
             return string.Empty;
         // +1 for trailing NUL written by Win32 (we strip it from the C# string anyway).
-        Span<char> buf = len < 512 ? stackalloc char[len + 1] : new char[len + 1];
+        var buf = len < 512 ? stackalloc char[len + 1] : new char[len + 1];
         int read;
         fixed (char* p = buf)
         {

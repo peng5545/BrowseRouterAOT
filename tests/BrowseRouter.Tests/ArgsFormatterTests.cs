@@ -68,8 +68,7 @@ public class ArgsFormatterTests
     public void Unknown_token_is_left_intact_and_doesnt_count_as_seen()
     {
         // Unknown {weird} stays as-is; since no recognised token fired, the URL is appended.
-        var actual = Format(["--prefix={weird}-suffix"], U("https://example.com/"),
-            "https://example.com/");
+        var actual = Format(["--prefix={weird}-suffix"], U("https://example.com/"), "https://example.com/");
         Assert.Equal(["--prefix={weird}-suffix", "https://example.com/"], actual);
     }
 
