@@ -4,12 +4,16 @@
   //
   // Comments and trailing commas are allowed (System.Text.Json with relaxed options).
   // Adjust paths to where your browsers live; %ProgramFiles%-style tokens are expanded.
-
   "host": {
-    "pipeName": "BrowseRouterAOT",
+    // Disable to run headless (no tray icon). The pipe server and config
+    // watcher keep working; the Host can then only be stopped via Ctrl+C
+    // in its console (or Task Manager).
     "enableTrayIcon": true
   },
-  "notify": { "enabled": false },
+  // Notifications render as self-drawn toast popups at the bottom-right of the
+  // work area (independent of the tray icon — works even when enableTrayIcon=false).
+  // durationMs is clamped to [500, 60000].
+  "notify": { "enabled": false, "durationMs": 3000 },
   "log": { "enabled": true },
 
   "defaultBrowser": "edge",

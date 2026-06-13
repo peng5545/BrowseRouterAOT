@@ -1,7 +1,7 @@
 ﻿using BrowseRouter.Core;
 using BrowseRouter.Host.Interop;
 using BrowseRouter.Host.Logging;
-using System.IO;
+using BrowseRouter.Host.Notify;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -39,8 +39,11 @@ internal sealed class TrayIcon : IDisposable
 
     /// <summary>
     /// Raised when the user right-clicks the tray icon (or presses menu key).
+    /// The argument is the tray window's HWND — useful because most subscribers
+    /// pass it to <c>TrackPopupMenu</c> as the owner, and threading it through
+    /// the event lets subscribers avoid capturing the tray in a closure.
     /// </summary>
-    public event Action? OnTrayRightClick;
+    public event Action<IntPtr>? OnTrayRightClick;
 
     /// <summary>
     /// Raised when a popup-menu item is chosen. Argument is the item id.
@@ -73,25 +76,6 @@ internal sealed class TrayIcon : IDisposable
         _thread.SetApartmentState(ApartmentState.STA);
         _thread.Start();
         _ready.Wait();
-    }
-
-    /// <summary>
-    /// Show a balloon notification on the tray icon. On Windows 10 the Action Center
-    /// uses this; on Windows 11 it renders as a native toast.
-    /// </summary>
-    public void ShowBalloon(string title, string message)
-    {
-        if (!_iconAdded)
-            return;
-        var nid = _nid;
-        nid.uFlags = Shell32.NifInfo | Shell32.NifIcon | Shell32.NifMessage | Shell32.NifTip;
-        nid.SetInfoTitle(Truncate(title, 63));
-        nid.SetInfo(Truncate(message, 255));
-        nid.dwInfoFlags = Shell32.NiifUser | Shell32.NiifLargeIcon;
-        if (!Shell32.Shell_NotifyIcon(Shell32.NimModify, ref nid))
-        {
-            _log.Warn("Shell_NotifyIcon NIM_MODIFY (balloon) failed.");
-        }
     }
 
     /// <summary>
@@ -180,7 +164,7 @@ internal sealed class TrayIcon : IDisposable
 
     private void AddTrayIcon()
     {
-        var ownedIcon = LoadIconFromPngResource();
+        var ownedIcon = IconLoader.LoadEmbedded(0, 0, shared: true, defaultSize: true, _log);
         // Fall back to the system application icon (shared handle — do NOT destroy).
         var sharedIcon = User32.LoadIcon(IntPtr.Zero, User32.IdiApplication);
         var hIcon = ownedIcon != IntPtr.Zero ? ownedIcon : sharedIcon;
@@ -194,12 +178,9 @@ internal sealed class TrayIcon : IDisposable
             uFlags = Shell32.NifMessage | Shell32.NifIcon | Shell32.NifTip | Shell32.NifShowtip,
             uCallbackMessage = CallbackMessage,
             hIcon = hIcon,
-            uVersion = Shell32.NotifyiconVersion4,
-            hBalloonIcon = hIcon
+            uVersion = Shell32.NotifyiconVersion4
         };
         _nid.SetTip(Constants.AppName);
-        _nid.SetInfo(string.Empty);
-        _nid.SetInfoTitle(string.Empty);
 
         if (!Shell32.Shell_NotifyIcon(Shell32.NimAdd, ref _nid))
         {
@@ -216,34 +197,6 @@ internal sealed class TrayIcon : IDisposable
         }
 
         _iconAdded = true;
-    }
-
-    private IntPtr LoadIconFromPngResource()
-    {
-        try
-        {
-            var assembly = typeof(TrayIcon).Assembly;
-            using var stream = assembly.GetManifestResourceStream("BrowseRouter.Host.Resources.icon.png");
-            if (stream == null)
-            {
-                _log.Warn(
-                    "Embedded icon resource 'BrowseRouter.Host.Resources.icon.png' not found; falling back to system icon.");
-                return IntPtr.Zero;
-            }
-
-            using var ms = new MemoryStream();
-            stream.CopyTo(ms);
-            var bytes = ms.ToArray();
-
-            // 0x00030000 is the magic version for CreateIconFromResourceEx
-            return User32.CreateIconFromResourceEx(bytes, (uint) bytes.Length, true, 0x00030000, 0, 0,
-                User32.LrShared | User32.LrDefaultsize);
-        }
-        catch (Exception ex)
-        {
-            _log.Warn($"Native PNG to Icon conversion failed: {ex.Message}");
-            return IntPtr.Zero;
-        }
     }
 
     private void RemoveTrayIcon()
@@ -273,12 +226,12 @@ internal sealed class TrayIcon : IDisposable
         {
             case CallbackMessage:
             {
-                uint eventMsg = unchecked((uint) (lParam.ToInt64() & 0xFFFF));
+                var eventMsg = unchecked((uint) (lParam.ToInt64() & 0xFFFF));
                 if (eventMsg is User32.WmRbuttonup or User32.WmContextmenu)
                 {
                     try
                     {
-                        OnTrayRightClick?.Invoke();
+                        OnTrayRightClick?.Invoke(hWnd);
                     }
                     catch (Exception ex)
                     {
@@ -291,7 +244,7 @@ internal sealed class TrayIcon : IDisposable
 
             case User32.WmCommand:
             {
-                int cmdId = unchecked((int) (wParam.ToInt64() & 0xFFFF));
+                var cmdId = unchecked((int) (wParam.ToInt64() & 0xFFFF));
                 try
                 {
                     OnMenuCommand?.Invoke(cmdId);
@@ -315,7 +268,4 @@ internal sealed class TrayIcon : IDisposable
 
         return User32.DefWindowProc(hWnd, msg, wParam, lParam);
     }
-
-    private static string Truncate(string s, int max) =>
-        string.IsNullOrEmpty(s) ? string.Empty : s.Length <= max ? s : s[..max];
 }

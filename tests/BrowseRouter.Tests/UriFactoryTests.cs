@@ -27,6 +27,28 @@ public class UriFactoryTests
         var uri = UriFactory.TryParse("https%3A%2F%2Fexample.com%2Fx");
         Assert.NotNull(uri);
         Assert.Equal("example.com", uri!.Host);
+        Assert.Equal("https", uri.Scheme);
+    }
+
+    [Theory]
+    [InlineData("mailto:foo@bar.com")]
+    [InlineData("file:///C:/Windows/System32/drivers/etc/hosts")]
+    [InlineData("ms-windows-store://pdp/?ProductId=foo")]
+    [InlineData("ftp://example.com/x")]
+    public void Non_web_schemes_are_rejected(string input)
+    {
+        // BrowseRouter only routes http/https. A non-web scheme must not be
+        // accepted, even if prefixing https:// would technically parse.
+        Assert.Null(UriFactory.TryParse(input));
+    }
+
+    [Fact]
+    public void Url_encoded_non_web_scheme_does_not_slip_through()
+    {
+        // The percent-decode fallback used to silently swap hosts when a
+        // wrapped URL decoded to a different origin. Verify the rejected
+        // set is still rejected after decode.
+        Assert.Null(UriFactory.TryParse("mailto%3Afoo%40bar.com"));
     }
 
     [Fact]

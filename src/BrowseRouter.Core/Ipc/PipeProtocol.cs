@@ -91,10 +91,17 @@ public static class PipeProtocol
         return $"{baseName}.{Sanitize(userSid)}.{sessionId}";
     }
 
-    private static string Sanitize(string s)
+    /// <summary>
+    /// Replace characters illegal in a kernel-object name with safe substitutes.
+    /// SIDs only contain alphanumeric and hyphens, but be defensive in case a caller
+    /// passed a domain-qualified name. Shared between the pipe name and the
+    /// single-instance mutex name (both end up in the same NT namespace).
+    /// </summary>
+    public static string Sanitize(string s)
     {
-        // Pipe names can't contain backslashes. SIDs only contain alphanumeric and
-        // hyphens, but be defensive in case caller passed a domain-qualified name.
+        ArgumentNullException.ThrowIfNull(s);
+        if (s.IndexOf('\\', StringComparison.Ordinal) < 0)
+            return s;
         var sb = new StringBuilder(s.Length);
         foreach (var ch in s)
             sb.Append(ch == '\\' ? '-' : ch);

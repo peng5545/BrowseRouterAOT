@@ -1,6 +1,7 @@
 ﻿using BrowseRouter.Core.Routing;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Serialization;
 
 namespace BrowseRouter.Core.Config;
@@ -90,7 +91,12 @@ public sealed class RootConfig
         Browsers = browsers ?? new Dictionary<string, BrowserDef>(StringComparer.OrdinalIgnoreCase);
         Rules = rules ?? [];
         SourceRules = sourceRules ?? [];
-        Filters = filters ?? [];
+        // Sort filters by priority at load time so the per-click hot path
+        // (FilterPipeline.TryApply) iterates them in priority order without
+        // re-allocating an OrderBy buffer on every URL click. Stable sort
+        // preserves the on-disk order for ties, matching the original
+        // BrowseRouter semantics.
+        Filters = (filters ?? []).OrderBy(f => f.Priority).ToList();
     }
 
     /// <summary>
@@ -109,15 +115,20 @@ public sealed class RootConfig
             warnings.Add($"DefaultBrowser '{DefaultBrowser}' is not defined in 'browsers'.");
         }
 
-        // Defensive: a hand-edited config could in principle null these out
-        // (e.g. by serialising a config whose state we don't control). Treat
-        // null as empty so Validate stays total.
+        if (Notify is { Enabled: true, DurationMs: < 500 or > 60000 })
+        {
+            warnings.Add(
+                $"Notify.DurationMs ({Notify.DurationMs}ms) is outside the recommended range of 500ms to 60000ms.");
+        }
+
+        // Rules / SourceRules are guaranteed non-null by the JsonConstructor
+        // (defaulting to [] on the way in), so a straight foreach is safe.
         foreach (var rule in Rules)
         {
             if (!Browsers.ContainsKey(rule.Browser))
             {
                 warnings.Add(
-                    $"URL rule matches '{RuleEngine.DescribeMatch(rule.Match)}' but references undefined browser '{rule.Browser}'.");
+                    $"URL rule matches '{RuleEngine.DescribeRule(rule)}' but references undefined browser '{rule.Browser}'.");
             }
         }
 

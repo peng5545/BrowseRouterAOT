@@ -1,6 +1,7 @@
 ﻿using BrowseRouter.Core;
 using BrowseRouter.Host.Interop;
 using BrowseRouter.Host.Logging;
+using System.IO;
 
 namespace BrowseRouter.Host.Registration;
 
@@ -20,6 +21,21 @@ internal sealed class AutoStart(FileLogger log)
     /// </summary>
     public void Enable(string hostExePath)
     {
+        // Validate before we touch the registry. Two failure modes the user
+        // can't easily recover from without manual cleanup:
+        //  - path points at a non-existent file (e.g. user moved the bundle
+        //    after registering): the Run key would never start a daemon.
+        //  - path contains a quote: the Run key's command-line parser would
+        //    break on the next logon and the user would see "Windows cannot
+        //    find …".
+        if (string.IsNullOrWhiteSpace(hostExePath))
+            throw new ArgumentException("Host executable path is empty.", nameof(hostExePath));
+        if (hostExePath.Contains('"'))
+            throw new ArgumentException("Host executable path must not contain a double-quote character.",
+                nameof(hostExePath));
+        if (!File.Exists(hostExePath))
+            throw new FileNotFoundException($"Host executable not found at: {hostExePath}", hostExePath);
+
         var cmd = $"\"{hostExePath}\" --host";
         using var key = AdvApi32.CreateHkcuSubKey(RunKey);
         var rc = AdvApi32.SetStringValue(key, ValueName, cmd);

@@ -1,6 +1,7 @@
 ﻿using BrowseRouter.Core.Ipc;
 using BrowseRouter.Core.Json;
 using BrowseRouter.Host.Logging;
+using System.Collections.Generic;
 using System.IO.Pipes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,15 +22,26 @@ internal sealed class PipeServer(
     Func<OpenUrlRequest, CancellationToken, Task<OpenUrlResponse>> handler
 ) : IAsyncDisposable
 {
+    /// <summary>
+    /// Per-request timeout. A client that connects but never finishes a request
+    /// is killed after this duration (linked to the server-shutdown token).
+    /// Prevents a stuck/malicious client from holding a handler task open
+    /// indefinitely.
+    /// </summary>
+    private static readonly TimeSpan PerRequestTimeout = TimeSpan.FromSeconds(5);
+
     private CancellationTokenSource? _cts;
     private Task? _loop;
+    private int _started; // 0 = not started, 1 = started. Interlocked gate.
+    private readonly List<Task> _inFlight = [];
 
     /// <summary>
     /// Begin listening. Returns immediately; the loop runs in the background.
+    /// Idempotent under concurrent calls — only the first wins.
     /// </summary>
     public void Start()
     {
-        if (_loop is not null)
+        if (Interlocked.CompareExchange(ref _started, 1, 0) != 0)
             return;
         _cts = new CancellationTokenSource();
         _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
@@ -53,10 +65,14 @@ internal sealed class PipeServer(
 
                 await server.WaitForConnectionAsync(ct).ConfigureAwait(false);
 
-                // Detach: server is owned by HandleClientAsync from here on.
+                // Detach: server is owned by HandleClientAsync from here on. Track
+                // the task so DisposeAsync can drain in-flight handlers instead of
+                // abandoning the request mid-flight (the launcher would then hang
+                // waiting for a response that's never going to come).
                 var owned = server;
                 server = null;
-                _ = HandleClientAsync(owned, ct);
+                var task = HandleClientAsync(owned, ct);
+                TrackInFlight(task);
             }
             catch (OperationCanceledException)
             {
@@ -71,6 +87,12 @@ internal sealed class PipeServer(
                 }
                 catch (OperationCanceledException)
                 {
+                    // Token fired during the back-off — shut down.
+                    return;
+                }
+                catch (ObjectDisposedException)
+                {
+                    // CTS disposed during the back-off (DisposeAsync racing) — same exit.
                     return;
                 }
             }
@@ -84,8 +106,15 @@ internal sealed class PipeServer(
         }
     }
 
-    private async Task HandleClientAsync(NamedPipeServerStream stream, CancellationToken ct)
+    private async Task HandleClientAsync(NamedPipeServerStream stream, CancellationToken serverCt)
     {
+        // Per-request timeout linked to the server-shutdown token. If a client
+        // connects and then sits silent (or the Host is so backed up that the
+        // pipe write blocks), the request is aborted after PerRequestTimeout
+        // and the stream is disposed.
+        using var reqCts = CancellationTokenSource.CreateLinkedTokenSource(serverCt);
+        reqCts.CancelAfter(PerRequestTimeout);
+        var ct = reqCts.Token;
         try
         {
             await using (stream)
@@ -113,14 +142,40 @@ internal sealed class PipeServer(
                     .ConfigureAwait(false);
             }
         }
+        catch (OperationCanceledException) when (serverCt.IsCancellationRequested)
+        {
+            // Server is shutting down — quiet exit.
+        }
         catch (OperationCanceledException)
         {
-            /* shutting down */
+            // Per-request timeout fired. The launcher will see a dropped
+            // connection and treat it as "Host unreachable", which is the
+            // correct user-facing behaviour for a stuck client.
+            log.Warn($"Pipe handler exceeded {PerRequestTimeout.TotalSeconds:F0}s; aborting.");
         }
         catch (Exception ex)
         {
             log.Warn($"Client handler: {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    private void TrackInFlight(Task task)
+    {
+        lock (_inFlight)
+        {
+            _inFlight.Add(task);
+        }
+
+        // Fire-and-forget cleanup: remove the task from the in-flight set as
+        // soon as it completes (success, fault, or cancel). Exceptions are
+        // already logged inside HandleClientAsync's own try/catch chain.
+        _ = task.ContinueWith(t =>
+        {
+            lock (_inFlight)
+            {
+                _inFlight.Remove(t);
+            }
+        }, TaskScheduler.Default);
     }
 
     public async ValueTask DisposeAsync()
@@ -140,6 +195,28 @@ internal sealed class PipeServer(
             }
 
             _loop = null;
+        }
+
+        // Drain in-flight handlers so a Quit-during-click doesn't abandon a
+        // request that the launcher is still waiting on. Give them a brief
+        // grace period (longer than PerRequestTimeout ensures any timer
+        // already fired and unblocked the handler) then move on regardless.
+        Task[] toAwait;
+        lock (_inFlight)
+        {
+            toAwait = _inFlight.ToArray();
+        }
+
+        if (toAwait.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(toAwait).WaitAsync(TimeSpan.FromSeconds(8)).ConfigureAwait(false);
+            }
+            catch
+            {
+                /* timeout or a handler swallowed OCE — proceed to teardown */
+            }
         }
 
         _cts?.Dispose();

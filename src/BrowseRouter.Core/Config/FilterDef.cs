@@ -1,4 +1,6 @@
-﻿using System.Text.RegularExpressions;
+﻿using System;
+using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace BrowseRouter.Core.Config;
 
@@ -19,7 +21,7 @@ public sealed class FilterDef
     /// <summary>
     /// Regex pattern applied to the URL. Required.
     /// </summary>
-    public required string Find { get; set; }
+    public required string Find { get; set; } = string.Empty;
 
     /// <summary>
     /// Replacement template. Supports <c>$N</c> and <c>unescape($N)</c>. Required.
@@ -39,5 +41,29 @@ public sealed class FilterDef
     //
     // AOT note: RegexOptions.Compiled is intentionally NOT set — AOT does not
     // support runtime IL emit. Same caveat as RegexMatch / WindowTitleRegexMatch.
-    internal Regex? CompiledRegex;
+    //
+    // Lazy<Regex?> with ExecutionAndPublication: first concurrent caller wins
+    // the build, others reuse the cached instance. A bad pattern returns null
+    // so FilterPipeline.ApplyOne skips the filter without throwing on the hot
+    // path.
+    internal readonly Lazy<Regex?> CompiledRegex;
+
+    public FilterDef()
+    {
+        CompiledRegex = new Lazy<Regex?>(() =>
+        {
+            try
+            {
+                // Find is `required` so the C# nullable analysis should
+                // accept it as non-null, but the constructor runs before the
+                // required-property check fires — null-forgiving is the
+                // accepted pattern for this gap.
+                return new Regex(Find, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
+    }
 }

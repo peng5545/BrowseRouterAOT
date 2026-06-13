@@ -129,10 +129,24 @@ public class ConfigSerializationTests
         Assert.NotNull(cfg);
         Assert.False(cfg.Host.EnableTrayIcon);
 
-        var round = JsonSerializer.Deserialize(
-            JsonSerializer.Serialize(cfg, AppJsonContext.Default.RootConfig),
+        var round = JsonSerializer.Deserialize(JsonSerializer.Serialize(cfg, AppJsonContext.Default.RootConfig),
             AppJsonContext.Default.RootConfig);
         Assert.False(round!.Host.EnableTrayIcon);
+    }
+
+    [Fact]
+    public void NotifyOptions_round_trip_duration_ms()
+    {
+        // Verify that durationMs is correctly round-tripped.
+        const string json = """{ "notify": { "enabled": true, "durationMs": 5000 } }""";
+        var cfg = JsonSerializer.Deserialize(json, AppJsonContext.Default.RootConfig);
+        Assert.NotNull(cfg);
+        Assert.True(cfg.Notify.Enabled);
+        Assert.Equal(5000, cfg.Notify.DurationMs);
+
+        var round = JsonSerializer.Deserialize(JsonSerializer.Serialize(cfg, AppJsonContext.Default.RootConfig),
+            AppJsonContext.Default.RootConfig);
+        Assert.Equal(5000, round!.Notify.DurationMs);
     }
 
     [Theory]

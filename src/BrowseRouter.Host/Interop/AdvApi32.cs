@@ -74,6 +74,16 @@ internal static partial class AdvApi32
         uint cbData
     );
 
+    [LibraryImport("advapi32.dll", EntryPoint = "RegQueryValueExW")]
+    public static partial int RegQueryValueEx(
+        SafeRegistryHandle hKey,
+        [MarshalAs(UnmanagedType.LPWStr)] string? lpValueName,
+        IntPtr lpReserved,
+        out uint lpType,
+        [Out] byte[] lpData,
+        ref uint lpcbData
+    );
+
     [LibraryImport("advapi32.dll", EntryPoint = "RegDeleteValueW", StringMarshalling = StringMarshalling.Utf16)]
     public static partial int RegDeleteValue(SafeRegistryHandle hKey, string lpValueName);
 
@@ -92,6 +102,22 @@ internal static partial class AdvApi32
         // RegSetValueExW takes a byte buffer; need to encode the string + trailing NUL.
         var bytes = System.Text.Encoding.Unicode.GetBytes(value + '\0');
         return RegSetValueEx(key, name, 0, type, bytes, (uint) bytes.Length);
+    }
+
+    /// <summary>
+    /// Read a REG_SZ / REG_EXPAND_SZ value. Returns null if missing, wrong type,
+    /// the buffer is too small, or any other failure. Buffer is fixed-size:
+    /// 2048 bytes (1024 chars) is well over any realistic <c>%1</c> command line.
+    /// </summary>
+    public static string? ReadStringValue(SafeRegistryHandle key, string name)
+    {
+        var buf = new byte[2048];
+        var cb = (uint) buf.Length;
+        var rc = RegQueryValueEx(key, name, IntPtr.Zero, out var type, buf, ref cb);
+        if (rc != 0 || (type != RegSz && type != RegExpandSz))
+            return null;
+        // cb holds bytes written including the trailing NUL; strip it.
+        return cb < 2 ? string.Empty : System.Text.Encoding.Unicode.GetString(buf, 0, (int) (cb - 2));
     }
 
     /// <summary>
@@ -130,5 +156,73 @@ internal static partial class AdvApi32
         {
             key?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Snapshot of one registry value for atomic write-then-restore. A null
+    /// <see cref="Value"/> means the value was absent (to restore, delete it).
+    /// <see cref="Type"/> captures the original registry type
+    /// (<see cref="RegSz"/>/<see cref="RegExpandSz"/>/<see cref="RegDword"/>) so
+    /// a restore round-trips the value byte-for-byte — a hand-written
+    /// <c>REG_EXPAND_SZ</c> doesn't get downgraded to <c>REG_SZ</c>.
+    /// </summary>
+    internal readonly record struct ValueSnapshot(string ParentPath, string ValueName, string? Value, uint Type);
+
+    /// <summary>
+    /// Read the current value (or note its absence) for later restore. Safe to
+    /// call on a missing parent key — returns an "absent" snapshot with
+    /// <see cref="ValueSnapshot.Type"/> set to <see cref="RegSz"/> (a harmless
+    /// placeholder since the absence path takes the delete branch in
+    /// <see cref="RestoreValue"/>).
+    /// </summary>
+    public static ValueSnapshot SnapshotValue(string parentPath, string valueName)
+    {
+        SafeRegistryHandle? key = null;
+        try
+        {
+            if (RegOpenKeyEx(HkeyCurrentUser, parentPath, 0, KeyRead, out key) != 0)
+                return new ValueSnapshot(parentPath, valueName, null, RegSz);
+
+            // Do our own RegQueryValueEx here (instead of going through
+            // ReadStringValue) so we can capture BOTH the decoded value and its
+            // actual registry type. ReadStringValue deliberately drops the type.
+            var buf = new byte[2048];
+            var cb = (uint) buf.Length;
+            var rc = RegQueryValueEx(key, valueName, IntPtr.Zero, out var type, buf, ref cb);
+            if (rc != 0)
+                return new ValueSnapshot(parentPath, valueName, null, RegSz);
+
+            // We only snapshot string-typed values; non-string types (DWORD,
+            // BINARY) don't pass through SetStringValue in RestoreValue, so
+            // round-tripping them isn't supported. Treat the snapshot as
+            // "absent" so a rollback that hits one of these just leaves the
+            // existing value alone.
+            if (type != RegSz && type != RegExpandSz)
+                return new ValueSnapshot(parentPath, valueName, null, RegSz);
+
+            // cb includes the trailing NUL for SZ/EXPAND_SZ; strip it.
+            var value = cb < 2 ? string.Empty : System.Text.Encoding.Unicode.GetString(buf, 0, (int) (cb - 2));
+            return new ValueSnapshot(parentPath, valueName, value, type);
+        }
+        finally
+        {
+            key?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Restore a snapshot taken with <see cref="SnapshotValue"/>. "Absent"
+    /// snapshots (null Value) delete the value; present snapshots rewrite it.
+    /// </summary>
+    public static void RestoreValue(ValueSnapshot snap)
+    {
+        if (snap.Value is null)
+        {
+            DeleteHkcuValueQuiet(snap.ParentPath, snap.ValueName);
+            return;
+        }
+
+        using var key = CreateHkcuSubKey(snap.ParentPath);
+        _ = SetStringValue(key, snap.ValueName, snap.Value, snap.Type);
     }
 }

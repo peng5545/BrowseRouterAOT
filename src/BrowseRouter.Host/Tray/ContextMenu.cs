@@ -27,6 +27,7 @@ internal sealed class ContextMenu
         var menu = User32.CreatePopupMenu();
         try
         {
+            var flags = User32.MfString;
             foreach (var item in items)
             {
                 if (ReferenceEquals(item, Separator) || item.Label == "-")
@@ -35,7 +36,6 @@ internal sealed class ContextMenu
                     continue;
                 }
 
-                uint flags = User32.MfString;
                 if (!item.Enabled)
                     flags |= User32.MfDisabled | User32.MfGrayed;
                 User32.AppendMenu(menu, flags, new IntPtr(item.Id), item.Label);

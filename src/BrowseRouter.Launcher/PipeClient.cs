@@ -52,6 +52,8 @@ internal static class PipeClient
                 }
                 catch (OperationCanceledException)
                 {
+                    // Distinguish: did the CALLER cancel us (propagate), or did
+                    // only our internal 200ms probe expire (silent retry)?
                     if (ct.IsCancellationRequested)
                         throw;
                     return (false, null);
@@ -79,11 +81,29 @@ internal static class PipeClient
                 await client.DisposeAsync().ConfigureAwait(false);
             }
         }
+        catch (OperationCanceledException)
+        {
+            // The caller's CT fired — propagate so they can tell "I gave up"
+            // from "the Host is unreachable" (the latter returns (false, null)).
+            throw;
+        }
         catch
         {
             // Pipe closed mid-conversation / Host crashed.
             return (false, null);
         }
+    }
+
+    /// <summary>
+    /// Describe the pipe this process would connect to (matches what
+    /// <see cref="BuildPipeName"/> computes). Cheap; safe to call before
+    /// <see cref="SendAsync"/> to log a "trying" line, or after a failed
+    /// SendAsync to log a "failed" line.
+    /// </summary>
+    public static string DescribePipe()
+    {
+        var name = BuildPipeName(out var diag);
+        return $@"\\.\pipe\{name} ({diag})";
     }
 
     /// <summary>
@@ -97,11 +117,6 @@ internal static class PipeClient
 
         diagnosticInfo = $"sid={sid}, sess={sessionId}";
 
-        // For simplicity and speed in the Launcher AOT, we use the default pipe name.
-        // If a user overrides this in config, they should ideally keep it default
-        // or we'd need a more robust shared discovery.
-        const string pipeBase = Constants.PipeBaseName;
-
-        return PipeProtocol.BuildPipeName(pipeBase, sid, sessionId);
+        return PipeProtocol.BuildPipeName(Constants.PipeBaseName, sid, sessionId);
     }
 }

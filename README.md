@@ -11,6 +11,8 @@ Route every link click on Windows to the browser **you** want, based on JSON rul
 
 Inspired by [nref/BrowseRouter](https://github.com/nref/BrowseRouter); rewritten on **.NET 10 + Native AOT** with a clean JSON schema, hot-reloading config.
 
+Toast popup UI inspired by [noxad/windows-toast-notifications](https://github.com/noxad/windows-toast-notifications) — ported from WinForms to pure Win32 P/Invoke (no `System.Windows.Forms` / `System.Drawing`) to fit the AOT-only-Win32 rule.
+
 ---
 
 ## Features
@@ -20,7 +22,7 @@ Inspired by [nref/BrowseRouter](https://github.com/nref/BrowseRouter); rewritten
 - **URL filters** rewrite URLs before launch — strip `utm_*`, unwrap SafeLinks, etc. Regex with `$1` and an `unescape($1)` macro.
 - **Background daemon** — rules parsed once, then in-memory. Hot-reloaded on file save.
 - **Tray icon** with Reload / Open config / Open log / Default Apps / Quit menu.
-- **Desktop notifications** ("Opening Edge — https://…").
+- **Custom toast popups** (`BrowseRouter (AOT)` / `edge->https://…`) — self-drawn Win32 windows, not subject to Action Center's ~5 s floor.
 - **Foreground-aware** — brings the chosen browser to the front even when it was sitting in the background.
 - **No console flash** — Launcher runs as GUI subsystem, so Windows never briefly shows a black window on URL clicks.
 - **Per-user install** — no admin needed. Registration is plain HKCU.
@@ -153,7 +155,7 @@ If **no** element contains any tag, `{url}` is appended automatically — so `"a
 
 ```json
 { 
-  "name": "Unwrap Outlook SafeLinks",
+  "name":    "Unwrap Outlook SafeLinks",
   "find":    ".*safelinks\\.protection\\.outlook\\.com.*[?&]url=([^&]+).*",
   "replace": "unescape($1)",
   "priority": 2 
@@ -201,5 +203,3 @@ Subcommand flags (`--register`, etc.) on the Launcher are delegated to the Host.
 - **Windows 10 1803+** does not let any app silently set itself as the default browser. After `--register`, the Default Apps page opens — you must click "BrowseRouter (AOT)" once.
 - **Regex from config** is AOT-interpreted (no JIT for `RegexOptions.Compiled`). Performance is fine for one URL per click but heavy regex on every match list would be visible.
 - **Per-user only** — registration is HKCU. No machine-wide setup.
-
----

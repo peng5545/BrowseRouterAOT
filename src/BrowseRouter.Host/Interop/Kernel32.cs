@@ -14,12 +14,6 @@ internal static partial class Kernel32
         SetLastError = true)]
     public static partial IntPtr GetModuleHandle(string? lpModuleName);
 
-    /// <summary>
-    /// WTS API: returns the session id of the active console session.
-    /// </summary>
-    [LibraryImport("kernel32.dll")]
-    public static partial uint WTSGetActiveConsoleSessionId();
-
     [LibraryImport("kernel32.dll")]
     public static partial uint GetCurrentProcessId();
 
@@ -28,10 +22,16 @@ internal static partial class Kernel32
     public static partial bool ProcessIdToSessionId(uint dwProcessId, out uint pSessionId);
 
     /// <summary>
-    /// Convenience: session id of the current process (0 if the API fails).
+    /// Convenience: session id of the current process. Prefers the kernel
+    /// API but falls back to <see cref="System.Diagnostics.Process.SessionId"/>
+    /// when <c>ProcessIdToSessionId</c> returns 0 — that happens on rare
+    /// locked-down configurations and previously produced cross-session
+    /// collisions with services running in session 0.
     /// </summary>
     public static int GetCurrentSessionId()
     {
-        return ProcessIdToSessionId(GetCurrentProcessId(), out var sid) ? (int) sid : 0;
+        if (ProcessIdToSessionId(GetCurrentProcessId(), out var sid) && sid != 0)
+            return (int) sid;
+        return System.Diagnostics.Process.GetCurrentProcess().SessionId;
     }
 }
