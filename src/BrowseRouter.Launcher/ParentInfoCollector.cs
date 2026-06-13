@@ -14,6 +14,9 @@ internal static class ParentInfoCollector
 {
     /// <summary>
     /// One snapshot of a calling-source. All fields may be null/empty.
+    /// <see cref="Pid"/> is the OS-reported parent PID (the click originator);
+    /// null when the OS denies the query (SYSTEM, elevated parents) or when
+    /// the parent has already exited.
     /// </summary>
     internal sealed record SourceInfo(int? Pid, string? ProcessName, string? ProcessPath, string? WindowTitle);
 
@@ -38,8 +41,7 @@ internal static class ParentInfoCollector
                 // weirdly-named processes like "node-script" or 32-char-truncated
                 // names; one source keeps processName and processPath in lock-step.
                 processPath = TryGetProcessImagePath(pid);
-                processName = processPath is not null ? Path.GetFileName(processPath) :
-                    !string.IsNullOrEmpty(proc.ProcessName) ? proc.ProcessName + ".exe" : null;
+                processName = processPath is not null ? Path.GetFileName(processPath) : null;
                 // MainWindowTitle is best-effort: many command-line / service parents
                 // have none, in which case we'll fall back to the foreground window.
                 windowTitle = SafeMainWindowTitle(proc);
@@ -50,15 +52,33 @@ internal static class ParentInfoCollector
             }
         }
 
-        if (string.IsNullOrEmpty(windowTitle))
+        if (string.IsNullOrEmpty(windowTitle) && parentPid is { } p && p != 0)
         {
             // Foreground-window fallback covers cases where the parent is e.g. the
             // shell or an orphan launcher: the actual visible window is usually
-            // the one the user just clicked in.
-            windowTitle = User32.GetForegroundWindowTitle();
+            // the one the user just clicked in. BUT — we cross-check that the
+            // foreground window actually belongs to the same process. Without
+            // this, a stale foreground (user's browser, an unrelated window
+            // that grabbed focus during the click) gets attributed to the
+            // click source, which can then wrongly match a
+            // WindowTitleContains rule and route to the wrong browser.
+            if (TryGetForegroundWindowPid(out var fgPid) && fgPid == p)
+            {
+                windowTitle = User32.GetForegroundWindowTitle();
+            }
         }
 
         return new SourceInfo((int?) parentPid, processName, processPath, windowTitle);
+    }
+
+    private static bool TryGetForegroundWindowPid(out uint pid)
+    {
+        pid = 0;
+        var hwnd = User32.GetForegroundWindow();
+        if (hwnd == IntPtr.Zero)
+            return false;
+        User32.GetWindowThreadProcessId(hwnd, out pid);
+        return pid != 0;
     }
 
     private static uint? TryGetParentPid()

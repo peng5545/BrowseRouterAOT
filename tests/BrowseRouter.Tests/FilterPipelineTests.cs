@@ -23,10 +23,14 @@ public class FilterPipelineTests
     [Fact]
     public void Returns_first_filter_that_changes_input_sorted_by_priority()
     {
+        // FilterPipeline now relies on the caller to pre-sort by priority
+        // (RootConfig does this in its JsonConstructor). The test mirrors
+        // that contract: pass the filters in priority order, verify the
+        // first one in iteration order is the one that fires.
         var filters = new List<FilterDef>
         {
-            new() { Name = "second", Find = "^input$", Replace = "second", Priority = 2 },
             new() { Name = "first", Find = "^input$", Replace = "first", Priority = 1 },
+            new() { Name = "second", Find = "^input$", Replace = "second", Priority = 2 },
             new() { Name = "third", Find = "^input$", Replace = "third", Priority = 3 }
         };
         var ok = FilterPipeline.TryApply(filters, "input", out var output, out var applied);
@@ -80,6 +84,11 @@ public class FilterPipelineTests
     [Fact]
     public void Broken_filter_does_not_block_subsequent_filters()
     {
+        // A bad Find pattern is a CONFIG error, not a per-click error. The
+        // filter is silently treated as a no-op (URL passes through unchanged)
+        // and the next filter in priority order still gets a chance to run.
+        // No onError is fired — the operator's signal for this is the warning
+        // RootConfig.Validate() would emit at config load time.
         var errors = new List<(string, Exception)>();
         var filters = new List<FilterDef>
         {
@@ -91,48 +100,47 @@ public class FilterPipelineTests
         Assert.True(ok);
         Assert.Equal("new data", output);
         Assert.Equal("rewrite", applied);
-        Assert.Single(errors);
-        Assert.Equal("bad", errors[0].Item1);
+        Assert.Empty(errors);
     }
 
     [Fact]
     public void Find_regex_is_cached_on_the_filter_instance()
     {
         // The Find pattern is user-supplied, so we can't source-generate, but we
-        // can avoid re-parsing it on every URL click. The first TryApply populates
-        // _compiledRegex; subsequent calls against the same FilterDef must reuse
-        // the very same instance.
+        // can avoid re-parsing it on every URL click. The first TryApply triggers
+        // Lazy<Regex?> evaluation; subsequent calls against the same FilterDef
+        // must reuse the very same Regex instance.
         var filter = new FilterDef { Name = "strip", Find = "utm_", Replace = "", Priority = 1 };
-        Assert.Null(filter.CompiledRegex);
+        Assert.False(filter.CompiledRegex.IsValueCreated);
 
         FilterPipeline.TryApply([filter], "https://x.com/?utm_a=1", out _, out _);
-        var first = filter.CompiledRegex;
+        var first = filter.CompiledRegex.Value;
         Assert.NotNull(first);
 
         FilterPipeline.TryApply([filter], "https://x.com/?utm_b=2", out _, out _);
         FilterPipeline.TryApply([filter], "https://x.com/?utm_c=3", out _, out _);
 
-        Assert.Same(first, filter.CompiledRegex);
+        Assert.Same(first, filter.CompiledRegex.Value);
     }
 
     [Fact]
     public void New_filter_instance_after_reload_does_not_share_cache()
     {
         // Config reload produces a fresh RootConfig (and therefore a fresh List
-        // of fresh FilterDef instances). The new instance must start with a
-        // null cache and lazily build its own regex on first use — so the old
+        // of fresh FilterDef instances). The new instance must start with an
+        // unevaluated Lazy and build its own regex on first use — so the old
         // generation's Regex becomes eligible for GC along with its owner.
         var oldFilter = new FilterDef { Name = "strip", Find = "utm_", Replace = "", Priority = 1 };
         FilterPipeline.TryApply([oldFilter], "https://x.com/?utm_a=1", out _, out _);
-        Assert.NotNull(oldFilter.CompiledRegex);
+        Assert.True(oldFilter.CompiledRegex.IsValueCreated);
 
         // Simulate a config reload: deserialisation yields a brand-new FilterDef.
         var newFilter = new FilterDef { Name = "strip", Find = "utm_", Replace = "", Priority = 1 };
-        Assert.Null(newFilter.CompiledRegex);
+        Assert.False(newFilter.CompiledRegex.IsValueCreated);
         Assert.NotSame(oldFilter, newFilter);
 
         FilterPipeline.TryApply([newFilter], "https://x.com/?utm_b=2", out _, out _);
-        Assert.NotNull(newFilter.CompiledRegex);
-        Assert.NotSame(oldFilter.CompiledRegex, newFilter.CompiledRegex);
+        Assert.True(newFilter.CompiledRegex.IsValueCreated);
+        Assert.NotSame(oldFilter.CompiledRegex.Value, newFilter.CompiledRegex.Value);
     }
 }

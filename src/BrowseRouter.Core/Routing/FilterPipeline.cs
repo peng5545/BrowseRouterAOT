@@ -1,18 +1,18 @@
 ﻿using BrowseRouter.Core.Config;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace BrowseRouter.Core.Routing;
 
 /// <summary>
-/// Applies <see cref="FilterDef"/> rewrites to a URL. Filters are sorted ascending by
-/// <see cref="FilterDef.Priority"/>; the first filter whose regex actually changes
-/// the URL wins (matching original BrowseRouter semantics — see
-/// <c>BrowseRouterX/BrowseRouter/Config/FilterPreference.cs::TryApply</c>).
-/// A single faulty filter (bad regex, exception during replace) is logged
-/// (via <paramref>
+/// Applies <see cref="FilterDef"/> rewrites to a URL. Filters are expected to be
+/// pre-sorted ascending by <see cref="FilterDef.Priority"/> — <see cref="RootConfig"/>
+/// does this in its JSON constructor, so the per-click hot path iterates them
+/// in priority order without re-allocating an OrderBy buffer on every URL click.
+/// The first filter whose regex actually changes the URL wins (matching the
+/// original BrowseRouter semantics). A single faulty filter (bad regex,
+/// exception during replace) is logged (via <paramref>
 ///     <name>onError</name>
 /// </paramref>
 /// ) and skipped — other filters keep running.
@@ -58,7 +58,9 @@ public static partial class FilterPipeline
         if (filters is null)
             return false;
 
-        foreach (var filter in filters.OrderBy(f => f.Priority))
+        // Filters come pre-sorted by RootConfig. Iteration order = priority
+        // order. The first filter that actually changes the input wins.
+        foreach (var filter in filters)
         {
             string candidate;
             try
@@ -85,18 +87,16 @@ public static partial class FilterPipeline
     /// <summary>
     /// Apply one filter to <paramref name="input"/>, expanding both <c>$N</c>
     /// (verbatim group) and <c>unescape($N)</c> (URL-decoded group) macros.
-    /// Returns the input unchanged when the find pattern doesn't match.
+    /// Returns the input unchanged when the find pattern doesn't match or
+    /// the filter's regex failed to compile (treated as a no-op, not an error).
     /// </summary>
     private static string ApplyOne(FilterDef filter, string input)
     {
-        // Cache the compiled regex on the FilterDef instance — it survives across
-        // every URL click until the owning RootConfig is replaced by a config
-        // reload, at which point the old instance (and its cached regex) becomes
-        // GC-eligible. AOT forbids RegexOptions.Compiled (no JIT for IL emit),
-        // so we still pay the parse cost on first use, but never again.
-        var find = filter.CompiledRegex ??= new Regex(
-            filter.Find, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        return find.Replace(input, match => ExpandReplacement(filter.Replace, match));
+        // CompiledRegex is a Lazy<Regex?> with ExecutionAndPublication thread
+        // safety; if a bad pattern in the config yielded null, just skip the
+        // filter (the URL passes through unchanged) instead of throwing.
+        var find = filter.CompiledRegex.Value;
+        return find is null ? input : find.Replace(input, match => ExpandReplacement(filter.Replace, match));
     }
 
     /// <summary>

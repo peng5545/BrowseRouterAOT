@@ -1,6 +1,7 @@
 ﻿using BrowseRouter.Core;
 using BrowseRouter.Host.Interop;
 using BrowseRouter.Host.Logging;
+using System.Collections.Generic;
 
 namespace BrowseRouter.Host.Registration;
 
@@ -27,9 +28,15 @@ internal sealed class BrowserRegistration(FileLogger log)
     /// path to <c>BrowseRouter.Launcher.exe</c>.
     /// </summary>
     /// <remarks>
-    /// Only <c>http</c> and <c>https</c> protocols are advertised. FTP and HTML
-    /// file associations are intentionally NOT registered — they would broaden
-    /// the surface for a routing tool that targets web links.
+    /// <para>Only <c>http</c> and <c>https</c> protocols are advertised. FTP and
+    /// HTML file associations are intentionally NOT registered — they would
+    /// broaden the surface for a routing tool that targets web links.</para>
+    ///
+    /// <para>The whole write is wrapped in a snapshot/restore safety net: before
+    /// touching any value we read its current state, and if any step throws we
+    /// walk the snapshots back in reverse order to undo the partial write. The
+    /// user's existing registration (if any) is therefore preserved verbatim on
+    /// failure instead of being left half-overwritten.</para>
     /// </remarks>
     public void Register(string launcherExePath)
     {
@@ -38,36 +45,70 @@ internal sealed class BrowserRegistration(FileLogger log)
         var iconValue = $"\"{launcherExePath}\",0";
         var openUrlCmd = $"\"{launcherExePath}\" \"%1\"";
 
-        using (var _ = AdvApi32.CreateHkcuSubKey(AppKey))
-        using (var caps = AdvApi32.CreateHkcuSubKey(CapabilitiesKey))
-        using (var urlAssoc = AdvApi32.CreateHkcuSubKey(UrlAssocKey))
+        // (parent path, value name, new value) tuples in the order we'll
+        // attempt writes. Snapshots are taken right before the commit phase
+        // so they reflect pre-write state.
+        var plan = new List<(string Parent, string Name, string New)>
         {
-            // Capabilities: shown in Default Apps "Choose default apps by protocol" UI.
-            CheckRc(AdvApi32.SetStringValue(caps, "ApplicationName", Constants.AppName));
-            CheckRc(AdvApi32.SetStringValue(caps, "ApplicationDescription", Constants.AppDescription));
-            CheckRc(AdvApi32.SetStringValue(caps, "ApplicationIcon", iconValue));
+            (CapabilitiesKey, "ApplicationName", Constants.AppName),
+            (CapabilitiesKey, "ApplicationDescription", Constants.AppDescription),
+            (CapabilitiesKey, "ApplicationIcon", iconValue),
+            (UrlAssocKey, "http", ProgIdName),
+            (UrlAssocKey, "https", ProgIdName),
+            (UrlProgIdKey, string.Empty, Constants.AppName),
+            (UrlProgIdKey, "FriendlyTypeName", Constants.AppName),
+            (UrlProgIdCmdKey, string.Empty, openUrlCmd),
+            (RegisteredAppsKey, Constants.AppId, CapabilitiesKey)
+        };
 
-            // Protocol associations: hand http(s) through our ProgId. ftp and
-            // .htm/.html are intentionally NOT registered.
-            CheckRc(AdvApi32.SetStringValue(urlAssoc, "http", ProgIdName));
-            CheckRc(AdvApi32.SetStringValue(urlAssoc, "https", ProgIdName));
+        // Snapshot phase. Capture every value we're about to overwrite; an
+        // "absent" entry is recorded when the value doesn't exist, so a
+        // rollback deletes it.
+        var snapshots = new AdvApi32.ValueSnapshot[plan.Count];
+        for (var i = 0; i < plan.Count; i++)
+        {
+            snapshots[i] = AdvApi32.SnapshotValue(plan[i].Parent, plan[i].Name);
         }
 
-        using (var progId = AdvApi32.CreateHkcuSubKey(UrlProgIdKey))
-        using (var cmd = AdvApi32.CreateHkcuSubKey(UrlProgIdCmdKey))
+        // Commit phase. Any throw lands in the catch and walks the
+        // snapshots back in reverse to undo the partial write.
+        try
         {
-            // The ProgId — what URL associations point at. shell\open\command
-            // is what Windows invokes with %1 = URL.
-            CheckRc(AdvApi32.SetStringValue(progId, string.Empty, Constants.AppName));
-            CheckRc(AdvApi32.SetStringValue(progId, "FriendlyTypeName", Constants.AppName));
-            CheckRc(AdvApi32.SetStringValue(cmd, string.Empty, openUrlCmd));
-        }
+            // Pre-create AppKey so the subtree always exists after a (failed
+            // or successful) Register. Rollback deletes the AppKey subkey,
+            // which is fine because the prior state didn't have it.
+            using var _ = AdvApi32.CreateHkcuSubKey(AppKey);
 
-        // Advertise ourselves in RegisteredApplications. Without this entry, our
-        // Capabilities subtree is invisible to the Default Apps UI.
-        using (var ra = AdvApi32.CreateHkcuSubKey(RegisteredAppsKey))
+            for (var i = 0; i < plan.Count; i++)
+            {
+                using var key = AdvApi32.CreateHkcuSubKey(plan[i].Parent);
+                CheckRc(AdvApi32.SetStringValue(key, plan[i].Name, plan[i].New));
+            }
+        }
+        catch (Exception ex)
         {
-            CheckRc(AdvApi32.SetStringValue(ra, Constants.AppId, CapabilitiesKey));
+            log.Warn($"Registration failed mid-write, rolling back: {ex.Message}");
+            for (var i = snapshots.Length - 1; i >= 0; i--)
+            {
+                try
+                {
+                    AdvApi32.RestoreValue(snapshots[i]);
+                }
+                catch (Exception rbEx)
+                {
+                    log.Warn($"Rollback of {plan[i].Parent}\\{plan[i].Name} failed: {rbEx.Message}");
+                }
+            }
+
+            // The pre-create above (line ~80) wrote the AppKey subkey without
+            // recording it in the snapshot list, so the snapshot walk doesn't
+            // remove it. On a failed Register, the prior state had no AppKey
+            // (the whole subtree is owned by us), so we can drop the now-empty
+            // parent key. On a successful Register, the subkey stays so the
+            // browser can find its Capabilities\… layout.
+            AdvApi32.DeleteHkcuTreeQuiet(AppKey);
+
+            throw;
         }
 
         log.Info("Registration complete.");

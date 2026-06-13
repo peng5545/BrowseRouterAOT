@@ -127,7 +127,7 @@ public static class RuleEngine
             if (rule.Exclude is not null && rule.Exclude.IsMatch(uri))
                 continue;
             return PickBrowser(config, rule.Browser, uri, rawUrl, appliedFilter,
-                $"matched URL rule ({DescribeMatch(rule.Match)})", out route, out err);
+                $"matched URL rule ({DescribeRule(rule)})", out route, out err);
         }
 
         // 5. Default browser (if configured).
@@ -180,6 +180,20 @@ public static class RuleEngine
         RegexMatch r => $"regex={r.Value}",
         _ => m.GetType().Name
     };
+
+    /// <summary>
+    /// Render a rule (its match clause plus, if present, its exclude clause)
+    /// as a single human-readable string for log/notification messages. The
+    /// exclude clause is appended in parentheses so a rule like
+    /// <c>github.com → chrome, except /maps</c> logs as
+    /// <c>hostSuffix=github.com (exclude pathPrefix=/maps)</c>.
+    /// </summary>
+    public static string DescribeRule(RuleDef rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        var head = DescribeMatch(rule.Match);
+        return rule.Exclude is null ? head : $"{head} (exclude {DescribeMatch(rule.Exclude)})";
+    }
 
     /// <summary>
     /// Short human label for a source matcher.

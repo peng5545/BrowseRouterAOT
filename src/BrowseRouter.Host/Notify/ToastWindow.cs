@@ -83,6 +83,7 @@ internal sealed class ToastWindow(
     private GCHandle _selfHandle;
     private bool _inNcDestroy;
     private bool _closing;
+    private bool _disposed;
 
     /// <summary>Actual width in physical pixels at the monitor's DPI.</summary>
     public int Width { get; private set; }
@@ -101,9 +102,11 @@ internal sealed class ToastWindow(
     public bool Show(string windowClassName, int x, int y, IntPtr hInstance)
     {
         // Create initially hidden + 0×0 — we resize after we can query the target
-        // monitor's DPI (which requires an HWND).
+        // monitor's DPI (which requires an HWND). WS_CLIPSIBLINGS stops one toast
+        // from drawing inside the rounded region of a sibling stacked above it.
         Handle = User32.CreateWindowEx(User32.WsExTopmost | User32.WsExToolwindow | User32.WsExNoactivate,
-            windowClassName, null, User32.WsPopup, x, y, 0, 0, IntPtr.Zero, IntPtr.Zero, hInstance, IntPtr.Zero);
+            windowClassName, null, User32.WsPopup | User32.WsClipSiblings, x, y, 0, 0, IntPtr.Zero, IntPtr.Zero,
+            hInstance, IntPtr.Zero);
 
         if (Handle == IntPtr.Zero)
         {
@@ -247,10 +250,12 @@ internal sealed class ToastWindow(
 
     /// <summary>
     /// Free every GDI handle and the GCHandle, and destroy the HWND if it's
-    /// still alive. Idempotent. In the normal flow <see cref="Close"/>
-    /// already destroyed the window and the notifier's <c>OnToastClosed</c>
-    /// calls this — by the time we get there, the HWND is invalid and the
-    /// GDI objects are no longer selected into any live DC.
+    /// still alive. <b>Idempotent by flag</b> — a second call is a no-op
+    /// rather than re-running the whole teardown sequence. In the normal
+    /// flow <see cref="Close"/> already destroyed the window and the
+    /// notifier's <c>OnToastClosed</c> calls this — by the time we get
+    /// there, the HWND is invalid and the GDI objects are no longer
+    /// selected into any live DC.
     /// </summary>
     public void Dispose()
     {
@@ -269,10 +274,11 @@ internal sealed class ToastWindow(
     /// then release the <c>GCHandle</c> slot and the three GDI handles
     /// (best effort — <c>DeleteObject</c> on a not-currently-valid handle
     /// is a no-op). We deliberately do <b>not</b> call <c>DestroyWindow</c>
-    /// here: we don't know whether the HWND is still alive, and even if it
-    /// is, destroying a window from a non-message thread can deadlock. The
-    /// leaked HWND is small (one kernel object) and reclaimed when its
-    /// owning process exits.
+    /// or <c>SetWindowLongPtr</c> here: we don't know whether the HWND is
+    /// still alive, and touching USER32 from a non-message thread can
+    /// deadlock (DestroyWindow) or fault against a freed window
+    /// (SetWindowLongPtr). The leaked HWND is small (one kernel object)
+    /// and reclaimed when its owning process exits.
     /// </para>
     /// </summary>
     ~ToastWindow()
@@ -282,6 +288,12 @@ internal sealed class ToastWindow(
 
     private void Dispose(bool disposing)
     {
+        // Idempotency: a second Dispose() (e.g. CloseAllToasts calling
+        // t.Dispose() after OnToastClosed already disposed) is a clean no-op.
+        if (_disposed)
+            return;
+        _disposed = true;
+
         var hwnd = Handle;
         // Zero out the public handle snapshot first — anyone reading Handle
         // after this point sees "gone", which is the truth.
@@ -293,7 +305,8 @@ internal sealed class ToastWindow(
             // crash) and the window is still alive — tear it down. The
             // WM_NCDESTROY-driven path (normal flow) is filtered out by
             // _inNcDestroy so we never call DestroyWindow on a half-destroyed
-            // window.
+            // window. The finalizer path (disposing==false) is also filtered
+            // out — see <see cref="~ToastWindow"/>.
             User32.DestroyWindow(hwnd);
         }
 
@@ -317,7 +330,10 @@ internal sealed class ToastWindow(
 
         if (_selfHandle.IsAllocated)
         {
-            if (hwnd != IntPtr.Zero)
+            // Only touch the HWND from a managed Dispose. From the finalizer
+            // we may be on a non-UI thread and the HWND is likely freed; the
+            // GCHandle itself is safe to free on any thread.
+            if (hwnd != IntPtr.Zero && disposing)
             {
                 // Clear the GCHandle from the window's user data BEFORE freeing
                 // the GCHandle itself, to avoid any late-arriving messages

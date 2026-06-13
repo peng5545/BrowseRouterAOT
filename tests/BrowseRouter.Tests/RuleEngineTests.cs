@@ -90,6 +90,46 @@ public class RuleEngineTests
     }
 
     [Fact]
+    public void DescribeRule_includes_exclude_clause_when_present()
+    {
+        // Without exclude, just the match label.
+        var bareRule = new RuleDef
+        {
+            Browser = "chrome", Match = new HostSuffixMatch { Value = "github.com" }
+        };
+        Assert.Equal("hostSuffix=github.com", RuleEngine.DescribeRule(bareRule));
+
+        // With exclude, appended in parentheses.
+        var withExclude = new RuleDef
+        {
+            Browser = "chrome",
+            Match = new HostSuffixMatch { Value = "github.com" },
+            Exclude = new PathPrefixMatch { Value = "/login" }
+        };
+        Assert.Equal("hostSuffix=github.com (exclude pathPrefix=/login)", RuleEngine.DescribeRule(withExclude));
+    }
+
+    [Fact]
+    public void Rule_reason_string_includes_exclude_clause()
+    {
+        // The "matched URL rule" reason must reflect the exclude too, so an
+        // operator reading the log sees the full rule, not a partial picture.
+        var cfg = Cfg(rules:
+        [
+            new RuleDef
+            {
+                Browser = "chrome",
+                Match = new HostSuffixMatch { Value = "google.com" },
+                Exclude = new PathPrefixMatch { Value = "/maps" }
+            }
+        ]);
+        Assert.True(RuleEngine.Resolve(cfg, "https://google.com/search", null, null, null, out var route, out _));
+        Assert.Contains("hostSuffix=google.com", route.Reason, StringComparison.Ordinal);
+        Assert.Contains("exclude", route.Reason, StringComparison.Ordinal);
+        Assert.Contains("pathPrefix=/maps", route.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Missing_default_and_no_rule_returns_NoRuleMatched_failure()
     {
         var cfg = Cfg(defaultBrowser: null);

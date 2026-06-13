@@ -57,13 +57,13 @@ internal sealed class ToastNotifier : IDisposable
 
     private volatile bool _started;
 
-    private volatile bool _disposed;
-
-    // Set by Dispose BEFORE the queue is drained and WM_CLOSE is posted. Notify()
-    // checks this at entry so a Notify that races the Dispose can't enqueue a
-    // ShowToast for a message loop that's about to exit (the resulting HWND would
-    // never be painted or torn down cleanly).
-    private volatile bool _shuttingDown;
+    // Lifecycle state, encoded so the two transitions (running → draining
+    // → disposed) are observably ordered. We only need to know "is the
+    // notifier past the point of no return" — any non-zero value means
+    // "ignore further Notify() calls, the message loop is on its way out".
+    // Notify() treats any non-zero as "shut down". Interlocked ops guarantee
+    // that the read-modify-write in Dispose is race-free without a lock.
+    private int _shutdownState; // 0 = alive, 1 = draining, 2 = disposed
 
     public ToastNotifier(FileLogger log, NotifyOptions options)
     {
@@ -78,6 +78,23 @@ internal sealed class ToastNotifier : IDisposable
     /// snapshot takes effect on the next <see cref="Notify"/> call.
     /// </summary>
     public void UpdateOptions(NotifyOptions options) => _options = options;
+
+    /// <summary>
+    /// Show a toast that bypasses <see cref="NotifyOptions.Enabled"/>. Intended
+    /// for the "this needs your attention even if you'd normally mute toasts"
+    /// case — currently only the host startup path that surfaces an invalid
+    /// config (the config itself controls the user's preference, so a bad
+    /// config shouldn't be able to silence the warning that says it's bad).
+    /// Subject to the same shutdown gating as <see cref="Notify"/>.
+    /// </summary>
+    public void ForceNotify(string message)
+    {
+        if (Volatile.Read(ref _shutdownState) != 0 || _dispatcherHwnd == IntPtr.Zero)
+            return;
+        var duration = _options.DurationMs;
+        _invokeQueue.Enqueue(() => ShowToast(message, duration));
+        User32.PostMessage(_dispatcherHwnd, InvokeMessage, IntPtr.Zero, IntPtr.Zero);
+    }
 
     /// <summary>
     /// Spin up the message thread. Blocks until the dispatcher window is ready.
@@ -108,11 +125,11 @@ internal sealed class ToastNotifier : IDisposable
     /// </summary>
     public void Notify(string message)
     {
-        // _shuttingDown is the FIRST gate: a Notify that races Dispose can't
+        // _shutdownState is the FIRST gate: a Notify that races Dispose can't
         // enqueue a ShowToast for a dispatcher that's about to close. The
         // _dispatcherHwnd == 0 check is a backstop for the moment after the
-        // HWND has been zeroed but before _shuttingDown is observed.
-        if (_shuttingDown || _dispatcherHwnd == IntPtr.Zero)
+        // HWND has been zeroed but before the state is observed.
+        if (Volatile.Read(ref _shutdownState) != 0 || _dispatcherHwnd == IntPtr.Zero)
             return;
         if (!_options.Enabled)
             return;
@@ -128,17 +145,11 @@ internal sealed class ToastNotifier : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (_disposed)
+        // Move to the draining state; idempotent — a second concurrent Dispose
+        // observes a non-zero state and returns. Notify() also observes this
+        // and bails, so no new ShowToast is enqueued.
+        if (Interlocked.Exchange(ref _shutdownState, 1) != 0)
             return;
-
-        // Flip _shuttingDown FIRST so any concurrent Notify returns immediately
-        // and doesn't enqueue an action that the closing loop would never process.
-        // The queue drain that follows is racy with the message loop's own
-        // dequeue; ConcurrentQueue handles that, but actions that have already
-        // been dequeued and are mid-ShowToast are guarded by the same flag at the
-        // top of ShowToast.
-        _shuttingDown = true;
-        _disposed = true;
 
         // Discard any not-yet-processed InvokeMessage payloads. Items already
         // dequeued by the loop are handled by the ShowToast-level guard.
@@ -147,8 +158,8 @@ internal sealed class ToastNotifier : IDisposable
         }
 
         // Zero the HWND BEFORE posting WM_CLOSE. Notify() checks this on entry
-        // (not just _shuttingDown) to make the post-dispose enqueue window atomic;
-        // a Notify that arrives after this line is guaranteed to see
+        // (not just _shutdownState) to make the post-dispose enqueue window
+        // atomic; a Notify that arrives after this line is guaranteed to see
         // _dispatcherHwnd == IntPtr.Zero and bail.
         var hwnd = Interlocked.Exchange(ref _dispatcherHwnd, IntPtr.Zero);
         if (hwnd != IntPtr.Zero)
@@ -158,6 +169,10 @@ internal sealed class ToastNotifier : IDisposable
 
         _thread?.Join(TimeSpan.FromSeconds(2));
         _ready.Dispose();
+
+        // Final state — purely diagnostic, ensures repeated Dispose calls
+        // always short-circuit at the gate.
+        Volatile.Write(ref _shutdownState, 2);
     }
 
     // ─── Message loop ─────────────────────────────────────────────────────────
@@ -313,7 +328,7 @@ internal sealed class ToastNotifier : IDisposable
         // to process its messages would leak it (the GCHandle would be cleaned
         // up by the finalizer, but the HWND itself is OS-reclaimed only at
         // process exit).
-        if (_shuttingDown)
+        if (Volatile.Read(ref _shutdownState) != 0)
             return;
 
         // Drop new toasts when the stack is already full, rather than fighting

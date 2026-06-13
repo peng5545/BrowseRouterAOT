@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace BrowseRouter.Core.Config;
 
@@ -89,23 +90,41 @@ public sealed class WindowTitleContainsMatch : SourceMatchDef
 }
 
 /// <summary>
-/// Regex match on the calling process's main window title.
+/// Regex match on the calling process's main window title. Substring match
+/// (the regex is not anchored). Compilation is wrapped in
+/// <see cref="LazyThreadSafetyMode.ExecutionAndPublication"/> so concurrent
+/// first-use can't double-build, and a malformed pattern degrades to
+/// "never matches" rather than throwing on the click hot path.
 /// </summary>
 public sealed class WindowTitleRegexMatch : SourceMatchDef
 {
-    private Regex? _compiled;
+    private readonly Lazy<Regex?> _compiled;
 
     /// <summary>
     /// The regex pattern. Required.
     /// </summary>
-    public required string Value { get; set; }
+    public required string Value { get; set; } = "";
+
+    public WindowTitleRegexMatch()
+    {
+        _compiled = new Lazy<Regex?>(() =>
+        {
+            try
+            {
+                return new Regex(Value, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
+    }
 
     /// <inheritdoc/>
     public override bool IsMatch(string? processName, string? processPath, string? windowTitle)
     {
         if (string.IsNullOrEmpty(windowTitle))
             return false;
-        var rx = _compiled ??= new Regex(Value, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        return rx.IsMatch(windowTitle);
+        return _compiled.Value?.IsMatch(windowTitle) ?? false;
     }
 }

@@ -42,8 +42,11 @@ internal sealed class FileLogger(LogOptions? options = null) : IDisposable
         lock (_gate)
         {
             _options = options;
-            // Force a re-open on next write by clearing the cached identity.
-            _writerDate = null;
+            // Close the old writer eagerly so we release the OS file handle
+            // right away. Without this, a log-dir change kept the old
+            // FileStream alive (and the directory on a different volume
+            // un-deletable) until the next write call happened to rotate.
+            CloseWriterLocked();
         }
     }
 
@@ -124,18 +127,18 @@ internal sealed class FileLogger(LogOptions? options = null) : IDisposable
     private static bool TryOpenWriterLocked(string dir, string date, out StreamWriter? writer, out string path)
     {
         writer = null;
-        path = Path.Combine(dir, $"{date}.log");
+        // Suffix the log filename with the current session id so two concurrent
+        // sessions of the same user (RDP / Fast User Switching) each get their
+        // own file. Without this, both sessions' Host daemons would try to
+        // share one log and their byte-level writes could interleave.
+        var session = System.Diagnostics.Process.GetCurrentProcess().SessionId;
+        path = Path.Combine(dir, $"{date}-sess{session}.log");
         try
         {
             Directory.CreateDirectory(dir);
-            // FileShare.ReadWrite (not Read) so a second Host — e.g. a stale
-            // session whose processes are still alive (disconnected RDP,
-            // Fast User Switching) — can also open the same file. A quick
-            // click in the new session then writes successfully instead of
-            // silently losing the log line. Other writers' appends may
-            // occasionally interleave at the byte level, but a single log
-            // line is a short Write+Flush pair that the OS delivers
-            // atomically at the buffer-cache level in practice.
+            // FileShare.ReadWrite so a tail/grep tool (or another session of
+            // the same user, on its own per-session file) can read while we
+            // write.
             var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
             // StreamWriter's default UTF-8-without-BOM is fine for log files.
             writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))

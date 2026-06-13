@@ -115,8 +115,15 @@ internal sealed class NotifierHost(
             case CmdOpenLog:
                 // Best-effort: ensure the log directory exists (FileLogger may not
                 // have rotated there yet) before handing it to explorer.
-                try { Directory.CreateDirectory(Constants.DefaultLogDirectory); }
-                catch (Exception ex) { log.Warn($"Create log dir failed: {ex.Message}"); }
+                try
+                {
+                    Directory.CreateDirectory(Constants.DefaultLogDirectory);
+                }
+                catch (Exception ex)
+                {
+                    log.Warn($"Create log dir failed: {ex.Message}");
+                }
+
                 OpenExplorer(Constants.DefaultLogDirectory, select: false, "Open log folder");
                 break;
 
@@ -187,8 +194,12 @@ internal sealed class NotifierHost(
     /// </summary>
     private OpenUrlResponse ResolveAndLaunch(OpenUrlRequest req)
     {
+        // Two PIDs are interesting in a click: the originating process (the one
+        // the user actually clicked a link in) and the Launcher (the small AOT
+        // shim the OS spawned). Log both distinctly so an audit reader can tell
+        // them apart.
         log.Info(
-            $"Open: \"{req.Url}\" (from pid={req.CallerPid}, sess={req.CallerSessionId}, process={req.SourceProcessName ?? "?"}, title={req.SourceWindowTitle ?? "?"})");
+            $"Open: \"{req.Url}\" (source pid={req.SourcePid}, launcher pid={req.LauncherPid}, launcher sess={req.LauncherSessionId}, process={req.SourceProcessName ?? "?"}, title={req.SourceWindowTitle ?? "?"})");
 
         if (!RuleEngine.Resolve(store.Current, req.Url, req.SourceProcessName, req.SourceProcessPath,
                 req.SourceWindowTitle, out var route, out var err,

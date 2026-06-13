@@ -72,4 +72,40 @@ public class UrlMatcherTests
         var m = new RegexMatch { Value = "GITHUB" };
         Assert.True(m.IsMatch(U("https://github.com")));
     }
+
+    [Fact]
+    public void Regex_with_bad_pattern_does_not_throw_on_hot_path()
+    {
+        // A malformed pattern is a config error. The matcher must degrade to
+        // "never matches" rather than throw on the first URL click — otherwise
+        // the Host would surface a 500-equivalent response for every URL
+        // until the operator fixed the config.
+        var m = new RegexMatch { Value = "(" }; // unbalanced group
+        Assert.False(m.IsMatch(U("https://example.com/")));
+        Assert.False(m.IsMatch(U("https://anything-else/")));
+    }
+
+    // ── IDN / punycode normalisation ────────────────────────────────────────
+
+    [Fact]
+    public void HostSuffix_matches_unicode_against_punycode_uri()
+    {
+        // .NET's Uri.Host returns the punycode form for IDN hosts. The
+        // matcher decodes that back to Unicode via IdnMapping so a config
+        // written in the more readable Unicode form matches a URL whose
+        // host is the punycode of the same string.
+        var m = new HostSuffixMatch { Value = "bücher.example" };
+        Assert.True(m.IsMatch(U("https://www.bücher.example/shelf")));
+
+        // Also test the equivalent URL written in its punycode form.
+        var m2 = new HostSuffixMatch { Value = "bücher.example" };
+        Assert.True(m2.IsMatch(U("https://www.xn--bcher-kva.example/shelf")));
+    }
+
+    [Fact]
+    public void ExactHost_matches_unicode_against_punycode_uri()
+    {
+        var m = new ExactHostMatch { Value = "münchen.de" };
+        Assert.True(m.IsMatch(U("https://münchen.de/events")));
+    }
 }

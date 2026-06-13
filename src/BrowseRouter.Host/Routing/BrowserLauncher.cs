@@ -1,6 +1,7 @@
 ﻿using BrowseRouter.Core.Routing;
 using BrowseRouter.Host.Logging;
 using System.Diagnostics;
+using System.IO;
 
 namespace BrowseRouter.Host.Routing;
 
@@ -26,22 +27,37 @@ internal sealed class BrowserLauncher(FileLogger log)
     public int? Launch(RouteResult route)
     {
         var path = Environment.ExpandEnvironmentVariables(route.Browser.Path);
-        var args = ArgsFormatter.Format(route.Browser.Args, route.Uri, route.RawUrl);
+        // Strip surrounding quotes (a hand-edited config can have them) and
+        // normalise to a full path so the log line shows the resolved location
+        // even when the config used a relative or env-var-laden path.
+        path = path.Trim().Trim('"');
+        if (!string.IsNullOrEmpty(path))
+        {
+            try
+            {
+                // Resolve relative paths against the install directory
+                // (AppContext.BaseDirectory), NOT the current working directory.
+                // The daemon's CWD can change during the session (someone runs
+                // a different program in the same console, the user opens a
+                // file dialog, etc.) — we want the configured browser to keep
+                // resolving to the same physical exe the user originally
+                // pointed at.
+                path = Path.IsPathRooted(path)
+                    ? Path.GetFullPath(path)
+                    : Path.GetFullPath(path, AppContext.BaseDirectory);
+            }
+            catch
+            {
+                /* leave as-is on malformed input */
+            }
+        }
 
         var psi = new ProcessStartInfo
         {
             FileName = path,
             UseShellExecute = false,
-            // We don't want to inherit the Host's hidden-window state.
-            CreateNoWindow = false,
-            // Do NOT redirect stdio — the browser may run for hours and we'd hold its
-            // pipes open. Detach completely.
-            RedirectStandardOutput = false,
-            RedirectStandardError = false,
-            RedirectStandardInput = false
         };
-        foreach (var a in args)
-            psi.ArgumentList.Add(a);
+        ArgsFormatter.Format(route.Browser.Args, route.Uri, route.RawUrl, psi.ArgumentList);
 
         try
         {
@@ -54,8 +70,24 @@ internal sealed class BrowserLauncher(FileLogger log)
                 return null;
             }
 
-            log.Info($"Launched {route.BrowserName} (pid={proc.Id}) for {route.Uri.OriginalString}; {route.Reason}");
-            return proc.Id;
+            // Process.Id can throw InvalidOperationException if the child has
+            // already exited between Start and the Id query (rare but real for
+            // command-line utilities that print a version and exit). Treat
+            // that as "launched successfully but already gone" — not an error.
+            int pid;
+            try
+            {
+                pid = proc.Id;
+            }
+            catch (InvalidOperationException)
+            {
+                log.Info(
+                    $"Launched {route.BrowserName} for {route.Uri.OriginalString}; {route.Reason} (child already exited)");
+                return null;
+            }
+
+            log.Info($"Launched {route.BrowserName} (pid={pid}) for {route.Uri.OriginalString}; {route.Reason}");
+            return pid;
         }
         catch (Exception ex)
         {

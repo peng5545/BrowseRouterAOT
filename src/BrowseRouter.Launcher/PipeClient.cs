@@ -52,6 +52,8 @@ internal static class PipeClient
                 }
                 catch (OperationCanceledException)
                 {
+                    // Distinguish: did the CALLER cancel us (propagate), or did
+                    // only our internal 200ms probe expire (silent retry)?
                     if (ct.IsCancellationRequested)
                         throw;
                     return (false, null);
@@ -78,6 +80,12 @@ internal static class PipeClient
             {
                 await client.DisposeAsync().ConfigureAwait(false);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // The caller's CT fired — propagate so they can tell "I gave up"
+            // from "the Host is unreachable" (the latter returns (false, null)).
+            throw;
         }
         catch
         {

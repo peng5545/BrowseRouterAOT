@@ -1,4 +1,7 @@
-﻿namespace BrowseRouter.Core.Ipc;
+﻿using System;
+using System.Text.Json.Serialization;
+
+namespace BrowseRouter.Core.Ipc;
 
 /// <summary>
 /// Request sent over the named pipe from Launcher → Host. One message per URL.
@@ -8,7 +11,8 @@
 public sealed class OpenUrlRequest
 {
     /// <summary>
-    /// Protocol message type. Always <c>"openUrl"</c> for now.
+    /// Protocol message type. Always <c>"openUrl"</c> for now. Not interpreted
+    /// by the Host — reserved for forward-compat (e.g. a future <c>"openUrlAck"</c>).
     /// </summary>
     public string Type { get; set; } = "openUrl";
 
@@ -36,12 +40,53 @@ public sealed class OpenUrlRequest
     public string? SourceWindowTitle { get; set; }
 
     /// <summary>
-    /// PID of the calling process. Diagnostic only.
+    /// PID of the *originating* process (the one that clicked the link and
+    /// caused the Launcher to spawn). Best-effort — the OS may deny the query
+    /// (SYSTEM / elevated parents), in which case this is 0. Distinct from
+    /// <see cref="LauncherPid"/>, which is the Launcher itself.
     /// </summary>
-    public int CallerPid { get; set; }
+    public int SourcePid { get; set; }
 
     /// <summary>
-    /// Session ID of the calling process. Diagnostic only.
+    /// PID of the Launcher process (the small AOT binary the OS spawned for
+    /// this click). Useful for diagnostic logs but not for routing — the
+    /// originating click attribution lives in <see cref="SourcePid"/>.
     /// </summary>
-    public int CallerSessionId { get; set; }
+    public int LauncherPid { get; set; }
+
+    /// <summary>
+    /// Session ID of the Launcher's session. Diagnostic only.
+    /// </summary>
+    public int LauncherSessionId { get; set; }
+
+    /// <summary>
+    /// STJ uses this constructor (over the parameterless one) so we can validate
+    /// the inbound URL at deserialisation time. An empty/whitespace
+    /// <c>"url"</c> in the wire payload throws <see cref="ArgumentException"/>
+    /// → STJ wraps it in a <see cref="System.Text.Json.JsonException"/>, which
+    /// the Host's pipe handler logs as "malformed request" instead of routing
+    /// a null URL through the resolver.
+    ///
+    /// <para><see cref="System.Diagnostics.CodeAnalysis.SetsRequiredMembersAttribute"/>
+    /// tells the C# compiler that this constructor satisfies the
+    /// <c>required Url</c> contract — the parameter is named <c>url</c>, STJ
+    /// routes the JSON property to it, and the C# nullable analysis trusts
+    /// that callers have provided a value.</para>
+    /// </summary>
+    [JsonConstructor]
+    [System.Diagnostics.CodeAnalysis.SetsRequiredMembers]
+    public OpenUrlRequest(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            throw new ArgumentException("Url is required and cannot be empty/whitespace.", nameof(url));
+        Url = url;
+    }
+
+    /// <summary>
+    /// Parameterless constructor for direct (non-STJ) construction, e.g. the
+    /// Launcher building a request via object-initializer syntax.
+    /// </summary>
+    public OpenUrlRequest()
+    {
+    }
 }

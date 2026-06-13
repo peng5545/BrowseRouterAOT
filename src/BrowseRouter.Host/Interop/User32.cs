@@ -184,6 +184,7 @@ internal static partial class User32
     // ─── Custom toast popup support ────────────────────────────────────────────
     // Window styles
     public const uint WsPopup = 0x80000000;
+    public const uint WsClipSiblings = 0x04000000;
     public const uint WsExTopmost = 0x00000008;
     public const uint WsExToolwindow = 0x00000080;
     public const uint WsExNoactivate = 0x08000000;

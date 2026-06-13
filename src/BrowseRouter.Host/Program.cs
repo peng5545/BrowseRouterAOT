@@ -63,8 +63,12 @@ internal static class Program
         using var instance = SingleInstance.TryAcquire();
         if (!instance.Acquired)
         {
-            // Another Host is already serving this user+session. Exit quietly so
-            // bootstrap races by the Launcher don't pile up duplicates.
+            // Another Host is already serving this user+session. Bootstrap
+            // races by the Launcher are normal and silent; a *user* who
+            // manually launched a second copy gets a hint via stderr so they
+            // know why nothing visibly happened.
+            FileLogger.TryLogConsole(
+                $"{Constants.AppName} is already running in this user session; this process will exit.");
             return 0;
         }
 
@@ -109,6 +113,15 @@ internal static class Program
         var enableTrayIcon = store.Current.Host.EnableTrayIcon;
         using var notifier = new ToastNotifier(log, store.Current.Notify);
         notifier.Start();
+        // If the very first config load failed, force a one-shot toast so the
+        // user knows why every subsequent click is landing on the "no rule
+        // matched" notification. We bypass notify.enabled because that's
+        // exactly the config the user just couldn't load.
+        if (initial is null)
+        {
+            notifier.ForceNotify($"Config is invalid: {loadErr?.Message ?? "unknown error"}");
+        }
+
         var launcher = new BrowserLauncher(log);
         var host = new NotifierHost(notifier, log, store, exitSignal, launcher);
 
@@ -198,10 +211,48 @@ internal static class Program
         // "Auto" mode: if the registered URL command points to our current
         // Launcher path, treat the install as already registered → unregister.
         // Otherwise (un-registered or moved), register fresh.
+        //
+        // We compare the registered command's launcher segment against the
+        // current launcher path (case-insensitive) rather than reconstructing
+        // the exact "expected" command string. That way, an install at a path
+        // containing embedded quotes (or any other legitimate variation) still
+        // matches its own previous registration.
         var (_, launcherExe) = ResolveExePaths();
-        var expectedCmd = $"\"{launcherExe}\" \"%1\"";
         var existingCmd = ReadExistingOpenCommand();
-        return string.Equals(existingCmd, expectedCmd, StringComparison.OrdinalIgnoreCase) ? Unregister() : Register();
+        return IsCommandForOurLauncher(existingCmd, launcherExe) ? Unregister() : Register();
+    }
+
+    /// <summary>
+    /// True when <paramref name="cmd"/> is a registered open command whose
+    /// launcher segment is the same file as <paramref name="launcherExe"/>.
+    /// "Same file" is matched by the command's first quoted token OR its
+    /// first whitespace-delimited token (whichever the registry value uses)
+    /// and compared case-insensitively against the launcher path's filename
+    /// and full-path suffix.
+    /// </summary>
+    private static bool IsCommandForOurLauncher(string? cmd, string launcherExe)
+    {
+        if (string.IsNullOrWhiteSpace(cmd) || string.IsNullOrEmpty(launcherExe))
+            return false;
+
+        // First token — either "path" (quoted) or path (unquoted up to space).
+        var span = cmd.AsSpan().TrimStart();
+        ReadOnlySpan<char> firstToken;
+        if (span.Length > 0 && span[0] == '"')
+        {
+            var end = span[1..].IndexOf('"');
+            if (end < 0)
+                return false;
+            firstToken = span[1..(end + 1)];
+        }
+        else
+        {
+            var end = span.IndexOf(' ');
+            firstToken = end < 0 ? span : span[..end];
+        }
+
+        var cmp = StringComparison.OrdinalIgnoreCase;
+        return firstToken.Equals(launcherExe, cmp) || firstToken.Equals(Path.GetFileName(launcherExe), cmp);
     }
 
     private static string? ReadExistingOpenCommand()
