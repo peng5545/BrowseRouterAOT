@@ -1,6 +1,5 @@
 ﻿using BrowseRouter.Core.Config;
 using BrowseRouter.Core.UriUtil;
-using System;
 using System.Diagnostics.CodeAnalysis;
 
 namespace BrowseRouter.Core.Routing;

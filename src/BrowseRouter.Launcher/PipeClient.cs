@@ -1,12 +1,12 @@
 ﻿using BrowseRouter.Core;
 using BrowseRouter.Core.Ipc;
 using BrowseRouter.Core.Json;
-using BrowseRouter.Launcher.Interop;
 using System.IO;
 using System.IO.Pipes;
 using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
+using CoreKernel32 = BrowseRouter.Core.Interop.Kernel32;
 
 namespace BrowseRouter.Launcher;
 
@@ -113,7 +113,7 @@ internal static class PipeClient
     {
         var user = WindowsIdentity.GetCurrent().User;
         var sid = user?.Value ?? "anon";
-        var sessionId = Kernel32.GetCurrentSessionId();
+        var sessionId = CoreKernel32.GetCurrentSessionId();
 
         diagnosticInfo = $"sid={sid}, sess={sessionId}";
 

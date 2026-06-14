@@ -10,6 +10,8 @@
          might add later (e.g. internal filter helper for whitebox testing).
          Today every Core type is public, so this is a no-op for current tests. -->
     <InternalsVisibleTo Include="BrowseRouter.Tests" />
+    <InternalsVisibleTo Include="BrowseRouter.Host" />
+    <InternalsVisibleTo Include="BrowseRouter.Launcher" />
   </ItemGroup>
 
 </Project>

@@ -1,9 +1,9 @@
 ﻿using BrowseRouter.Core;
 using BrowseRouter.Core.Ipc;
-using BrowseRouter.Host.Interop;
 using System.Diagnostics;
 using System.Security.Principal;
 using System.Threading;
+using CoreKernel32 = BrowseRouter.Core.Interop.Kernel32;
 
 namespace BrowseRouter.Host;
 
@@ -44,7 +44,7 @@ internal sealed class SingleInstance : IDisposable
     public static SingleInstance TryAcquire()
     {
         var sid = WindowsIdentity.GetCurrent().User?.Value ?? "unknown";
-        var session = Kernel32.GetCurrentSessionId();
+        var session = CoreKernel32.GetCurrentSessionId();
         // Mutex names must not contain backslashes. SIDs only contain
         // alphanumeric and hyphens, but be defensive in case caller passed a
         // domain-qualified name. Shared with PipeProtocol.
@@ -104,7 +104,7 @@ internal sealed class SingleInstance : IDisposable
                         continue;
                     // Same-session check: a different session's host owns a
                     // different mutex name and is irrelevant to ours.
-                    if (Kernel32.ProcessIdToSessionId((uint) p.Id, out var sid) && (int) sid == currentSession)
+                    if (CoreKernel32.ProcessIdToSessionId((uint) p.Id, out var sid) && (int) sid == currentSession)
                         return true;
                 }
                 finally

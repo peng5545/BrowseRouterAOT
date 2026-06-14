@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using CoreKernel32 = BrowseRouter.Core.Interop.Kernel32;
 
 namespace BrowseRouter.Launcher;
 
@@ -80,7 +81,7 @@ internal static class Program
         // guaranteed to agree (a ProcessIdToSessionId miss used to silently
         // produce session id 0, which collides with SYSTEM services in
         // session 0 and routed the click at the wrong host).
-        var sessionId = Kernel32.GetCurrentSessionId();
+        var sessionId = CoreKernel32.GetCurrentSessionId();
 
         var req = new OpenUrlRequest
         {

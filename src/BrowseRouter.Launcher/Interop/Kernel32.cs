@@ -3,7 +3,8 @@
 namespace BrowseRouter.Launcher.Interop;
 
 /// <summary>
-/// P/Invoke wrappers for <c>kernel32.dll</c>. AOT-friendly.
+/// Launcher-only P/Invoke wrappers for <c>kernel32.dll</c>. APIs shared with
+/// the Host live in <c>BrowseRouter.Core.Interop.Kernel32</c>.
 /// </summary>
 internal static partial class Kernel32
 {
@@ -28,27 +29,6 @@ internal static partial class Kernel32
         char* lpExeName,
         ref uint lpdwSize
     );
-
-    [LibraryImport("kernel32.dll")]
-    public static partial uint GetCurrentProcessId();
-
-    [LibraryImport("kernel32.dll", EntryPoint = "ProcessIdToSessionId")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool ProcessIdToSessionId(uint dwProcessId, out uint pSessionId);
-
-    /// <summary>
-    /// Convenience: session id of the current process. Prefers the kernel
-    /// API but falls back to <see cref="System.Diagnostics.Process.SessionId"/>
-    /// when <c>ProcessIdToSessionId</c> returns 0 — that happens on rare
-    /// locked-down configurations and previously produced cross-session
-    /// collisions with services running in session 0.
-    /// </summary>
-    public static int GetCurrentSessionId()
-    {
-        if (ProcessIdToSessionId(GetCurrentProcessId(), out var sid) && sid != 0)
-            return (int) sid;
-        return System.Diagnostics.Process.GetCurrentProcess().SessionId;
-    }
 
     [LibraryImport("kernel32.dll", EntryPoint = "AttachConsole", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

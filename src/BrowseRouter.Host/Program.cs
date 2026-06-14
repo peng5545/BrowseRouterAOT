@@ -11,6 +11,7 @@ using BrowseRouter.Host.Tray;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using CoreKernel32 = BrowseRouter.Core.Interop.Kernel32;
 
 namespace BrowseRouter.Host;
 
@@ -148,7 +149,7 @@ internal static class Program
         // routing. Pipe scoping by SID + session is still per-user/per-session.
         var pipeName = PipeProtocol.BuildPipeName(Constants.PipeBaseName,
             System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value ?? "anon",
-            Kernel32.GetCurrentSessionId());
+            CoreKernel32.GetCurrentSessionId());
 
         var server = new PipeServer(pipeName, log, host.HandlePipeRequest);
 

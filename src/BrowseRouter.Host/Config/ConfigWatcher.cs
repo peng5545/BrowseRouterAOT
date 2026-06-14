@@ -28,13 +28,6 @@ internal sealed class ConfigWatcher : IDisposable
     // the same file. The losing caller observes _reloading==1 and bails.
     private int _reloading;
 
-    // SHA-256 of the last config bytes that were successfully parsed. Used to
-    // suppress redundant onReload invocations when an editor (or AV) just
-    // touches the file without changing its content — otherwise the post-
-    // reload hook would reopen the log file, reset notifier state, etc. for
-    // every spurious change event.
-    private byte[]? _lastContentHash;
-
     public ConfigWatcher(ConfigStore store, FileLogger log, Action? onReload = null)
     {
         _store = store;
@@ -133,27 +126,12 @@ internal sealed class ConfigWatcher : IDisposable
 
         try
         {
+            // Spurious change events (AV, editor save-without-changes) will
+            // re-run the full reload path. That's harmless: ConfigLoader.TryLoad
+            // re-parses identical content into an equal RootConfig, ConfigStore
+            // accepts a same-content replacement, and the onReload hook
+            // (re-applying log + notifier options) is idempotent.
             var path = ConfigPaths.ConfigFile;
-            byte[] hash;
-            try
-            {
-                hash = System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path));
-            }
-            catch (Exception ex)
-            {
-                _log.Warn($"Config read failed: {ex.GetType().Name}: {ex.Message}");
-                return;
-            }
-
-            // If the file bytes are identical to the last successful load,
-            // skip both the deserialisation and the post-reload hook. A
-            // touch-only event (AV, editor save-without-changes) shouldn't
-            // cause us to reopen the log file or reset notifier options.
-            if (_lastContentHash is { } prev && hash.AsSpan().SequenceEqual(prev))
-            {
-                return;
-            }
-
             var next = ConfigLoader.TryLoad(path, out var error, _log);
             if (next is null)
             {
@@ -163,7 +141,6 @@ internal sealed class ConfigWatcher : IDisposable
             }
 
             _store.Replace(next);
-            _lastContentHash = hash;
             _log.Info(
                 $"Config reloaded: {next.Rules.Count} rules, {next.SourceRules.Count} source rules, {next.Filters.Count} filters, {next.Browsers.Count} browsers.");
             try

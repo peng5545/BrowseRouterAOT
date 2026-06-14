@@ -56,8 +56,7 @@ CodeCoverage/
 TestResult.xml
 nunit-*.xml
 
-DELIVERY.md
-PLAN.md
 dist/
 .vs/
 *.DotSettings.user
+/.*/
