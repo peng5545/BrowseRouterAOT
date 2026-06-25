@@ -2,6 +2,7 @@
 using BrowseRouter.Core.Ipc;
 using BrowseRouter.Core.Routing;
 using BrowseRouter.Host.Config;
+using BrowseRouter.Host.Diagnostics;
 using BrowseRouter.Host.Logging;
 using BrowseRouter.Host.Notify;
 using BrowseRouter.Host.Registration;
@@ -197,14 +198,61 @@ internal sealed class NotifierHost(
     // ─── Pipe server ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Per-request handler for the named-pipe server. Returns a
-    /// <see cref="Task{TResult}"/> so the pipe server can await it on its
-    /// own thread; the actual work runs on the thread pool via
+    /// Per-request handler for the named-pipe server. Dispatches on the
+    /// polymorphic request type: <see cref="OpenUrlRequest"/> → resolve + launch,
+    /// <see cref="GcRequest"/> → forced GC + diagnostics. Returns a
+    /// <see cref="Task{TResult}"/> so the pipe server can await it on its own
+    /// thread; the actual work runs on the thread pool via
     /// <see cref="Task.Run{TResult}(Func{TResult}, CancellationToken)"/>.
     /// </summary>
-    public Task<OpenUrlResponse> HandlePipeRequest(OpenUrlRequest req, CancellationToken ct)
+    public Task<PipeResponse> HandlePipeRequest(PipeRequest req, CancellationToken ct)
     {
-        return Task.Run(() => ResolveAndLaunch(req), ct);
+        return Task.Run(() => Dispatch(req), ct);
+    }
+
+    /// <summary>
+    /// Type-driven dispatch. A request kind the Host doesn't recognise is
+    /// answered with a failure <see cref="OpenUrlResponse"/> rather than thrown —
+    /// the pipe server's own try/catch would otherwise turn it into a generic
+    /// "Pipe handler threw" log entry and a launcher-friendly error is better.
+    /// </summary>
+    private PipeResponse Dispatch(PipeRequest req)
+    {
+        switch (req)
+        {
+            case OpenUrlRequest open:
+                return ResolveAndLaunch(open);
+            case GcRequest:
+                return HandleGc();
+            default:
+                log.Warn($"Unknown pipe request type: {req.GetType().Name}");
+                return new OpenUrlResponse { Ok = false, Error = $"Unknown request type: {req.GetType().Name}" };
+        }
+    }
+
+    /// <summary>
+    /// Forced GC + diagnostics snapshot. The full report is written to the log
+    /// (so a leak audit can be pieced together from the log file alone) AND
+    /// returned to the <c>--gc</c> caller, which prints it to its console.
+    /// </summary>
+    private GcResponse HandleGc()
+    {
+        log.Info("--gc requested: running forced GC and capturing diagnostics.");
+        try
+        {
+            var (_, _, report) = GcDiagnostics.RunForcedGc();
+            // Log each non-empty line so the structured log has searchable
+            // entries, then return the full block to the caller.
+            foreach (var line in report.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries))
+                log.Info(line);
+            log.Info("--gc complete.");
+            return new GcResponse { Ok = true, Report = report };
+        }
+        catch (Exception ex)
+        {
+            log.Error("--gc failed", ex);
+            return new GcResponse { Ok = false, Report = $"--gc failed: {ex.GetType().Name}: {ex.Message}" };
+        }
     }
 
     /// <summary>

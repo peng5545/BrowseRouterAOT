@@ -164,7 +164,13 @@ internal sealed class TrayIcon : IDisposable
 
     private void AddTrayIcon()
     {
-        var ownedIcon = IconLoader.LoadEmbedded(0, 0, shared: true, defaultSize: true, _log);
+        // Load an OWNED HICON (shared:false) so we control its lifetime: keep it
+        // alive for the icon's on-screen life, then DestroyIcon after NIM_DELETE.
+        // The previous code passed shared:true (LR_SHARED — system-cached, must
+        // NOT be DestroyIcon'd) while still setting _iconIsOwned=true and calling
+        // DestroyIcon on teardown, a contradictory no-op. shared:false makes the
+        // ownership-tracking below actually correct.
+        var ownedIcon = IconLoader.LoadEmbedded(0, 0, shared: false, defaultSize: true, _log);
         // Fall back to the system application icon (shared handle — do NOT destroy).
         var sharedIcon = User32.LoadIcon(IntPtr.Zero, User32.IdiApplication);
         var hIcon = ownedIcon != IntPtr.Zero ? ownedIcon : sharedIcon;

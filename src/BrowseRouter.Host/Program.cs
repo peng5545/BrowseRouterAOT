@@ -1,5 +1,6 @@
 ﻿using BrowseRouter.Core;
 using BrowseRouter.Core.Ipc;
+using BrowseRouter.Core.Json;
 using BrowseRouter.Host.Config;
 using BrowseRouter.Host.Interop;
 using BrowseRouter.Host.Ipc;
@@ -9,7 +10,10 @@ using BrowseRouter.Host.Registration;
 using BrowseRouter.Host.Routing;
 using BrowseRouter.Host.Tray;
 using System.IO;
+using System.IO.Pipes;
 using System.Linq;
+using System.Security.Principal;
+using System.Threading;
 using System.Threading.Tasks;
 using CoreKernel32 = BrowseRouter.Core.Interop.Kernel32;
 
@@ -31,29 +35,28 @@ internal static class Program
             return await RunDaemonAsync().ConfigureAwait(false);
         }
 
-        switch (args[0])
+        // Case-insensitive flag matching so `--GC`, `--Gc`, `--gc` all work —
+        // the Launcher forwards the arg verbatim and users don't expect a
+        // specific casing for a diagnostic toggle.
+        var cmd = args[0];
+        if (EqualsAny(cmd, "-h", "--help"))
         {
-            case "-h":
-            case "--help":
-                PrintHelp();
-                return 0;
-
-            case "-r":
-            case "--register":
-                return Register();
-
-            case "-u":
-            case "--unregister":
-                return Unregister();
-
-            case "--auto":
-                return AutoToggle();
-
-            default:
-                await Console.Error.WriteLineAsync($"Unknown argument: {args[0]}").ConfigureAwait(false);
-                PrintHelp();
-                return 2;
+            PrintHelp();
+            return 0;
         }
+
+        if (EqualsAny(cmd, "-r", "--register"))
+            return Register();
+        if (EqualsAny(cmd, "-u", "--unregister"))
+            return Unregister();
+        if (EqualsAny(cmd, "--auto"))
+            return AutoToggle();
+        if (EqualsAny(cmd, "--gc", "-gc"))
+            return await RunGcAsync().ConfigureAwait(false);
+
+        await Console.Error.WriteLineAsync($"Unknown argument: {cmd}").ConfigureAwait(false);
+        PrintHelp();
+        return 2;
     }
 
     /// <summary>
@@ -148,8 +151,7 @@ internal static class Program
         // Constants.PipeBaseName, so a custom name here would silently break click
         // routing. Pipe scoping by SID + session is still per-user/per-session.
         var pipeName = PipeProtocol.BuildPipeName(Constants.PipeBaseName,
-            System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value ?? "anon",
-            CoreKernel32.GetCurrentSessionId());
+            WindowsIdentity.GetCurrent().User?.Value ?? "anon", CoreKernel32.GetCurrentSessionId());
 
         var server = new PipeServer(pipeName, log, host.HandlePipeRequest);
 
@@ -176,6 +178,79 @@ internal static class Program
     // ────────────────────────────────────────────────────────────────────────
     // Subcommand handlers
     // ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// <c>--gc</c> client mode: this process is NOT the daemon — it connects to
+    /// the already-running Host daemon over the per-user pipe, sends a
+    /// <see cref="GcRequest"/>, and prints the diagnostics report the daemon
+    /// returns. The daemon has already logged the same report to its log file;
+    /// we only mirror it to the console here.
+    ///
+    /// <para>
+    /// This is the path the Launcher reaches via <c>BrowseRouter.Launcher.exe
+    /// --gc</c> (delegated through <c>Host.exe --gc</c>). It intentionally does
+    /// NOT spin up a daemon: triggering GC in a freshly-started process would
+    /// measure the wrong process and miss the real leak signal (which is the
+    /// long-lived daemon's accumulated GDI/handle/thread counts).
+    /// </para>
+    /// </summary>
+    private static async Task<int> RunGcAsync()
+    {
+        var pipeName = PipeProtocol.BuildPipeName(Constants.PipeBaseName,
+            WindowsIdentity.GetCurrent().User?.Value ?? "anon", CoreKernel32.GetCurrentSessionId());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var ct = cts.Token;
+
+        var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+
+        try
+        {
+            try
+            {
+                await client.ConnectAsync(2000, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                await Console.Error.WriteLineAsync(
+                        $@"{Constants.AppName}: daemon is not running on \\.\pipe\{pipeName}; cannot trigger GC.")
+                    .ConfigureAwait(false);
+                await Console.Error.WriteLineAsync("Start it first with 'BrowseRouter.Host.exe --host'.")
+                    .ConfigureAwait(false);
+                return 6;
+            }
+
+            try
+            {
+                await PipeProtocol.WriteAsync(client, new GcRequest(), AppJsonContext.Default.PipeRequest, ct)
+                    .ConfigureAwait(false);
+                var rsp = await PipeProtocol.ReadAsync(client, AppJsonContext.Default.PipeResponse, ct)
+                    .ConfigureAwait(false);
+
+                if (rsp is not GcResponse gc)
+                {
+                    await Console.Error.WriteLineAsync(
+                            $"{Constants.AppName}: unexpected response type from daemon: {rsp?.GetType().Name ?? "<null>"}.")
+                        .ConfigureAwait(false);
+                    return 7;
+                }
+
+                Console.WriteLine(gc.Report ?? (gc.Ok ? "(no report)" : "(daemon reported failure)"));
+                return gc.Ok ? 0 : 8;
+            }
+            catch (Exception ex)
+            {
+                await Console.Error
+                    .WriteLineAsync($"{Constants.AppName}: --gc failed: {ex.GetType().Name}: {ex.Message}")
+                    .ConfigureAwait(false);
+                return 8;
+            }
+        }
+        finally
+        {
+            await client.DisposeAsync().ConfigureAwait(false);
+        }
+    }
 
     private static int Register()
     {
@@ -343,6 +418,8 @@ internal static class Program
                              BrowseRouter.Host.exe -r | --register       Register as a default browser candidate.
                              BrowseRouter.Host.exe -u | --unregister     Remove registration + autostart.
                              BrowseRouter.Host.exe --auto                Toggle: register if not present, else unregister.
+                             BrowseRouter.Host.exe --gc                  Force a GC in the running daemon and print diagnostics
+                                                                         (heap, handles, threads, GDI/USER objects, thread pool).
                              BrowseRouter.Host.exe -h | --help           Show this help.
 
                            Config file: {Constants.DefaultConfigFilePath}

@@ -2,8 +2,10 @@
 
 /// <summary>
 /// Reply written by the Host after handling an <see cref="OpenUrlRequest"/>.
+/// The <c>"type":"openUrl"</c> discriminator is contributed by
+/// <see cref="PipeResponse"/>.
 /// </summary>
-public sealed class OpenUrlResponse
+public sealed class OpenUrlResponse : PipeResponse
 {
     /// <summary>
     /// True iff a browser was successfully launched.

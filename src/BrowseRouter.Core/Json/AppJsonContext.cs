@@ -20,4 +20,12 @@ namespace BrowseRouter.Core.Json;
 [JsonSerializable(typeof(RootConfig))]
 [JsonSerializable(typeof(OpenUrlRequest))]
 [JsonSerializable(typeof(OpenUrlResponse))]
+// Polymorphic pipe roots — registering the base types is enough; the source
+// generator walks the [JsonDerivedType] attributes on PipeRequest/PipeResponse
+// to emit the openUrl/gc discriminator contracts. Direct derived-type infos
+// (OpenUrlRequest etc.) above remain available for non-polymorphic use & tests.
+[JsonSerializable(typeof(PipeRequest))]
+[JsonSerializable(typeof(PipeResponse))]
+[JsonSerializable(typeof(GcRequest))]
+[JsonSerializable(typeof(GcResponse))]
 public partial class AppJsonContext : JsonSerializerContext;

@@ -83,7 +83,11 @@ internal static class ParentInfoCollector
 
     private static uint? TryGetParentPid()
     {
-        var self = Process.GetCurrentProcess();
+        // Process.GetCurrentProcess() returns an IDisposable whose SafeProcessHandle
+        // holds a real OS process handle. Dispose it eagerly rather than relying on
+        // the finalizer — this is the Launcher hot path (one cold start per click),
+        // so even a short-lived handle shouldn't wait for GC.
+        using var self = Process.GetCurrentProcess();
         var pbi = default(Ntdll.ProcessBasicInformation);
         var rc = Ntdll.NtQueryInformationProcess(self.Handle, Ntdll.ProcessBasicInformationClass, ref pbi,
             (uint) System.Runtime.InteropServices.Marshal.SizeOf<Ntdll.ProcessBasicInformation>(), out _);

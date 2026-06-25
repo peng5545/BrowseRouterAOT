@@ -114,8 +114,8 @@ internal static class Program
         var (connected, response) = await PipeClient.SendAsync(req, ct.Token).ConfigureAwait(false);
         switch (connected)
         {
-            case true when response is not null:
-                return response.Ok ? 0 : EmitFailure(url, response);
+            case true when response is OpenUrlResponse o:
+                return o.Ok ? 0 : EmitFailure(url, o);
             // First connect failed — log the pipe name + SID/session so a misconfigured
             // SID or a session boundary issue is diagnosable from a single console line.
             case false:
@@ -173,9 +173,9 @@ internal static class Program
 
             User32.AllowSetForegroundWindow(User32.AsfwAny);
             (connected, response) = await PipeClient.SendAsync(req, ct.Token).ConfigureAwait(false);
-            if (connected && response is not null)
+            if (connected && response is OpenUrlResponse o)
             {
-                return response.Ok ? 0 : EmitFailure(url, response);
+                return o.Ok ? 0 : EmitFailure(url, o);
             }
         }
 
@@ -254,6 +254,7 @@ internal static class Program
         "-u", "--unregister",
         "--auto",
         "-h", "--help",
+        "--gc",
     };
 
     private static bool IsSubcommand(string arg) => Subcommands.Contains(arg);
@@ -271,7 +272,7 @@ internal static class Program
                                  BrowseRouter.Launcher.exe <url> [<url> …]
                                      Forward each URL to the running Host (starts one if needed).
 
-                                 BrowseRouter.Launcher.exe -r|--register   |  -u|--unregister  |  --auto  |  -h|--help
+                                 BrowseRouter.Launcher.exe -r|--register   |  -u|--unregister  |  --auto  |  --gc  |  -h|--help
                                      Convenience — delegated to BrowseRouter.Host.exe.
 
                                  To start the daemon manually, run BrowseRouter.Host.exe --host directly.

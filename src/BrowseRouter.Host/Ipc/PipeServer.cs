@@ -19,7 +19,7 @@ namespace BrowseRouter.Host.Ipc;
 internal sealed class PipeServer(
     string pipeName,
     FileLogger log,
-    Func<OpenUrlRequest, CancellationToken, Task<OpenUrlResponse>> handler
+    Func<PipeRequest, CancellationToken, Task<PipeResponse>> handler
 ) : IAsyncDisposable
 {
     /// <summary>
@@ -119,7 +119,7 @@ internal sealed class PipeServer(
         {
             await using (stream)
             {
-                var req = await PipeProtocol.ReadAsync(stream, AppJsonContext.Default.OpenUrlRequest, ct)
+                var req = await PipeProtocol.ReadAsync(stream, AppJsonContext.Default.PipeRequest, ct)
                     .ConfigureAwait(false);
                 if (req is null)
                 {
@@ -127,7 +127,7 @@ internal sealed class PipeServer(
                     return;
                 }
 
-                OpenUrlResponse rsp;
+                PipeResponse rsp;
                 try
                 {
                     rsp = await handler(req, ct).ConfigureAwait(false);
@@ -138,7 +138,7 @@ internal sealed class PipeServer(
                     rsp = new OpenUrlResponse { Ok = false, Error = $"{ex.GetType().Name}: {ex.Message}" };
                 }
 
-                await PipeProtocol.WriteAsync(stream, rsp, AppJsonContext.Default.OpenUrlResponse, ct)
+                await PipeProtocol.WriteAsync(stream, rsp, AppJsonContext.Default.PipeResponse, ct)
                     .ConfigureAwait(false);
             }
         }

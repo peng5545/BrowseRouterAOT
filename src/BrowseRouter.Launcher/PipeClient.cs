@@ -33,7 +33,13 @@ internal static class PipeClient
     /// <c>(true, response)</c> on success or <c>(false, null)</c> if the pipe
     /// wasn't reachable in <see cref="ConnectTimeoutMs"/>.
     /// </summary>
-    public static async Task<(bool Connected, OpenUrlResponse? Response)> SendAsync(
+    /// <remarks>
+    /// The request is written as the polymorphic <see cref="PipeRequest"/> base
+    /// (so the <c>"type":"openUrl"</c> discriminator is emitted) and the reply
+    /// is read as <see cref="PipeResponse"/>; callers downcast to
+    /// <see cref="OpenUrlResponse"/> for the URL path.
+    /// </remarks>
+    public static async Task<(bool Connected, PipeResponse? Response)> SendAsync(
         OpenUrlRequest request,
         CancellationToken ct
     )
@@ -70,9 +76,9 @@ internal static class PipeClient
                 using var rwCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 rwCts.CancelAfter(ResponseTimeoutMs);
 
-                await PipeProtocol.WriteAsync(client, request, AppJsonContext.Default.OpenUrlRequest, rwCts.Token)
+                await PipeProtocol.WriteAsync(client, request, AppJsonContext.Default.PipeRequest, rwCts.Token)
                     .ConfigureAwait(false);
-                var rsp = await PipeProtocol.ReadAsync(client, AppJsonContext.Default.OpenUrlResponse, rwCts.Token)
+                var rsp = await PipeProtocol.ReadAsync(client, AppJsonContext.Default.PipeResponse, rwCts.Token)
                     .ConfigureAwait(false);
                 return (true, rsp);
             }

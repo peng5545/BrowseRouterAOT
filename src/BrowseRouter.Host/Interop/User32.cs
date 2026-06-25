@@ -317,6 +317,18 @@ internal static partial class User32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool DestroyIcon(IntPtr hIcon);
 
+    // ─── Per-process GUI resource counters (for GC diagnostics) ───────────────
+    // GetGuiResources returns the count of GDI or USER objects the process holds.
+    // These are the numbers that grow when the toast/tray code leaks a brush,
+    // font, region, icon, or window — exactly the leak classes this project
+    // audits. Counts are per-process and snapshot the kernel's accounting at
+    // call time; a stable count across a GC is the "no leak" signal.
+    public const uint GrGdiObjects = 0;
+    public const uint GrUserObjects = 1;
+
+    [LibraryImport("user32.dll", EntryPoint = "GetGuiResources")]
+    public static partial uint GetGuiResources(IntPtr hProcess, uint uiFlags);
+
     /// <summary>
     /// Predefined IDC_ARROW cursor id (cast from int 32512).
     /// </summary>

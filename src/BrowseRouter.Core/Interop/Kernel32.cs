@@ -11,6 +11,15 @@ internal static partial class Kernel32
     [LibraryImport("kernel32.dll")]
     public static partial uint GetCurrentProcessId();
 
+    /// <summary>
+    /// Pseudo-handle to the current process (<c>(HANDLE)-1</c>). Does NOT need to
+    /// be closed — passing it to APIs like <c>GetGuiResources</c> /
+    /// <c>GetProcessHandleCount</c> is cheaper than opening a real handle via
+    /// <see cref="System.Diagnostics.Process"/> just to read counters.
+    /// </summary>
+    [LibraryImport("kernel32.dll", EntryPoint = "GetCurrentProcess")]
+    public static partial IntPtr GetCurrentProcess();
+
     [LibraryImport("kernel32.dll", EntryPoint = "ProcessIdToSessionId")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool ProcessIdToSessionId(uint dwProcessId, out uint pSessionId);

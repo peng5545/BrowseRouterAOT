@@ -3,18 +3,14 @@
 namespace BrowseRouter.Core.Ipc;
 
 /// <summary>
-/// Request sent over the named pipe from Launcher → Host. One message per URL.
-/// The Host treats absent/null source fields as "unknown" (Launcher couldn't gather
-/// them — e.g. orphan parent / admin token), and falls back to URL rules only.
+/// Request sent over the named pipe from Launcher → Host to open one URL. The
+/// <c>"type":"openUrl"</c> discriminator is contributed by <see cref="PipeRequest"/>
+/// — there is no separate <c>Type</c> property here. The Host treats absent/null
+/// source fields as "unknown" (Launcher couldn't gather them — e.g. orphan
+/// parent / admin token), and falls back to URL rules only.
 /// </summary>
-public sealed class OpenUrlRequest
+public sealed class OpenUrlRequest : PipeRequest
 {
-    /// <summary>
-    /// Protocol message type. Always <c>"openUrl"</c> for now. Not interpreted
-    /// by the Host — reserved for forward-compat (e.g. a future <c>"openUrlAck"</c>).
-    /// </summary>
-    public string Type { get; set; } = "openUrl";
-
     /// <summary>
     /// The URL exactly as received from the OS (before any filter).
     /// </summary>
