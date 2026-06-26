@@ -207,7 +207,7 @@ internal sealed class NotifierHost(
     /// </summary>
     public Task<PipeResponse> HandlePipeRequest(PipeRequest req, CancellationToken ct)
     {
-        return Task.Run(() => Dispatch(req), ct);
+        return Task.FromResult(Dispatch(req));
     }
 
     /// <summary>

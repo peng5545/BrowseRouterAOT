@@ -35,6 +35,7 @@ internal static partial class Kernel32
     {
         if (ProcessIdToSessionId(GetCurrentProcessId(), out var sid) && sid != 0)
             return (int) sid;
-        return System.Diagnostics.Process.GetCurrentProcess().SessionId;
+        using var p = System.Diagnostics.Process.GetCurrentProcess();
+        return p.SessionId;
     }
 }

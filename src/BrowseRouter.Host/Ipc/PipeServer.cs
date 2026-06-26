@@ -159,23 +159,39 @@ internal sealed class PipeServer(
         }
     }
 
-    private void TrackInFlight(Task task)
+    private void TrackInFlight(Task inner)
     {
         lock (_inFlight)
         {
-            _inFlight.Add(task);
+            _inFlight.Add(inner);
         }
 
-        // Fire-and-forget cleanup: remove the task from the in-flight set as
-        // soon as it completes (success, fault, or cancel). Exceptions are
-        // already logged inside HandleClientAsync's own try/catch chain.
-        _ = task.ContinueWith(t =>
+        // Inline cleanup: await the handler, then remove from the in-flight
+        // set. No ContinueWith → no extra ThreadPool work item per request.
+        // Exceptions are already logged inside HandleClientAsync's own
+        // try/catch chain; the outer catch is a backstop for truly unexpected
+        // failures (e.g. a ThreadAbortException on older runtimes).
+        _ = Wrap(inner);
+        return;
+
+        async Task Wrap(Task t)
         {
-            lock (_inFlight)
+            try
             {
-                _inFlight.Remove(t);
+                await t.ConfigureAwait(false);
             }
-        }, TaskScheduler.Default);
+            catch
+            {
+                /* already logged inside HandleClientAsync */
+            }
+            finally
+            {
+                lock (_inFlight)
+                {
+                    _inFlight.Remove(t);
+                }
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
