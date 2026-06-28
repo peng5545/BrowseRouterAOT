@@ -10,7 +10,6 @@ using BrowseRouter.Host.Routing;
 using BrowseRouter.Host.Tray;
 using System.Diagnostics;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace BrowseRouter.Host;
@@ -200,14 +199,12 @@ internal sealed class NotifierHost(
     /// <summary>
     /// Per-request handler for the named-pipe server. Dispatches on the
     /// polymorphic request type: <see cref="OpenUrlRequest"/> → resolve + launch,
-    /// <see cref="GcRequest"/> → forced GC + diagnostics. Returns a
-    /// <see cref="Task{TResult}"/> so the pipe server can await it on its own
-    /// thread; the actual work runs on the thread pool via
-    /// <see cref="Task.Run{TResult}(Func{TResult}, CancellationToken)"/>.
+    /// <see cref="GcRequest"/> → forced GC + diagnostics. The handler is
+    /// synchronous; the pipe server's own accept loop runs it on a thread-pool
     /// </summary>
-    public Task<PipeResponse> HandlePipeRequest(PipeRequest req, CancellationToken ct)
+    public PipeResponse HandlePipeRequest(PipeRequest req)
     {
-        return Task.FromResult(Dispatch(req));
+        return Dispatch(req);
     }
 
     /// <summary>

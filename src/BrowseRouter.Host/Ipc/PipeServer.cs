@@ -19,7 +19,7 @@ namespace BrowseRouter.Host.Ipc;
 internal sealed class PipeServer(
     string pipeName,
     FileLogger log,
-    Func<PipeRequest, CancellationToken, Task<PipeResponse>> handler
+    Func<PipeRequest, PipeResponse> handler
 ) : IAsyncDisposable
 {
     /// <summary>
@@ -130,7 +130,7 @@ internal sealed class PipeServer(
                 PipeResponse rsp;
                 try
                 {
-                    rsp = await handler(req, ct).ConfigureAwait(false);
+                    rsp = handler(req);
                 }
                 catch (Exception ex)
                 {
