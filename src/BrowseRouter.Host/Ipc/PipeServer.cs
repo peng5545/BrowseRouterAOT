@@ -19,7 +19,7 @@ namespace BrowseRouter.Host.Ipc;
 internal sealed class PipeServer(
     string pipeName,
     FileLogger log,
-    Func<PipeRequest, PipeResponse> handler
+    Func<PipeRequest, CancellationToken, Task<PipeResponse>> handler
 ) : IAsyncDisposable
 {
     /// <summary>
@@ -130,7 +130,14 @@ internal sealed class PipeServer(
                 PipeResponse rsp;
                 try
                 {
-                    rsp = handler(req);
+                    rsp = await handler(req, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Per-request timeout or server shutdown - let it propagate
+                    // to the outer catch instead of being turned into an error
+                    // response (the caller has already given up waiting).
+                    throw;
                 }
                 catch (Exception ex)
                 {
