@@ -56,7 +56,7 @@ internal sealed class FileLogger : IDisposable
     // ── Writer-thread-only state (no lock needed) ──────────────────────────
     private LogOptions _options;
     private StreamWriter? _writer;
-    private string? _writerPath;
+    private string? _writerDir; // normalized dir used to open the current writer
     private string? _writerDate;
     private LogOptions? _writerOptions; // snapshot to detect option reloads
 
@@ -156,19 +156,24 @@ internal sealed class FileLogger : IDisposable
     {
         var opt = _options;
 
-        var dir = opt.Directory is { Length: > 0 } nonEmpty ? nonEmpty : Constants.DefaultLogDirectory;
+        var rawDir = opt.Directory is { Length: > 0 } nonEmpty ? nonEmpty : Constants.DefaultLogDirectory;
+        // Normalize so a trailing separator or forward-slash variant in the
+        // config does not cause a spurious writer reopen on every line:
+        // Path.GetDirectoryName() never has a trailing slash, but
+        // a user-edited dir string often does. GetFullPath canonicalizes both.
+        var dir = NormalizeDir(rawDir);
         var today = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         // Reopen the writer if the date, directory, or options reference
         // changed (hot-reload), or if the previous open failed (null writer).
         if (_writer is null ||
             _writerDate != today ||
-            _writerPath is null ||
-            !string.Equals(Path.GetDirectoryName(_writerPath), dir, StringComparison.OrdinalIgnoreCase) ||
+            _writerDir is null ||
+            !string.Equals(_writerDir, dir, StringComparison.OrdinalIgnoreCase) ||
             !ReferenceEquals(_writerOptions, opt))
         {
             CloseWriter();
-            if (!TryOpenWriter(dir, today, out _writer, out _writerPath))
+            if (!TryOpenWriter(dir, today, out _writer))
             {
                 // Open failed - mirror to console as a fallback, then bail.
                 // The next message will retry the open.
@@ -177,6 +182,7 @@ internal sealed class FileLogger : IDisposable
             }
 
             _writerDate = today;
+            _writerDir = dir;
             _writerOptions = opt;
         }
 
@@ -196,17 +202,12 @@ internal sealed class FileLogger : IDisposable
         }
     }
 
-    private static bool TryOpenWriter(
-        string dir,
-        string date,
-        [NotNullWhen(true)] out StreamWriter? writer,
-        out string path
-    )
+    private static bool TryOpenWriter(string dir, string date, [NotNullWhen(true)] out StreamWriter? writer)
     {
         writer = null;
         // Per-session suffix so two concurrent sessions (RDP / Fast User
         // Switching) each get their own file instead of interleaving writes.
-        path = Path.Combine(dir, $"{date}-sess{SessionId}.log");
+        var path = Path.Combine(dir, $"{date}-sess{SessionId}.log");
         try
         {
             Directory.CreateDirectory(dir);
@@ -248,9 +249,28 @@ internal sealed class FileLogger : IDisposable
         }
 
         _writer = null;
-        _writerPath = null;
+        _writerDir = null;
         _writerDate = null;
         _writerOptions = null;
+    }
+
+    /// <summary>
+    /// Canonicalize a directory path for comparison: removes trailing
+    /// separators, converts forward slashes to backslashes, and resolves
+    /// relative segments. Falls back to the raw string if the path is
+    /// malformed (illegal characters etc.) - in that case the comparison
+    /// may be imperfect, but TryOpenWriter will fail on the same path anyway.
+    /// </summary>
+    private static string NormalizeDir(string dir)
+    {
+        try
+        {
+            return Path.GetFullPath(dir);
+        }
+        catch
+        {
+            return dir;
+        }
     }
 
     private static void TryConsole(string line)
