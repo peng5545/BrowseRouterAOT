@@ -10,7 +10,6 @@ using BrowseRouter.Host.Routing;
 using BrowseRouter.Host.Tray;
 using System.Diagnostics;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace BrowseRouter.Host;
@@ -199,14 +198,12 @@ internal sealed class NotifierHost(
 
     /// <summary>
     /// Per-request handler for the named-pipe server. Dispatches on the
-    /// polymorphic request type: <see cref="OpenUrlRequest"/> → resolve + launch,
-    /// <see cref="GcRequest"/> → forced GC + diagnostics. The handler is
-    /// asynchronous and accepts the per-request cancellation token so a
-    /// timed-out request can bail before the blocking <c>Process.Start</c>.
+    /// polymorphic request type: <see cref="OpenUrlRequest"/> -> resolve + launch,
+    /// <see cref="GcRequest"/> -> forced GC + diagnostics.
     /// </summary>
-    public Task<PipeResponse> HandlePipeRequest(PipeRequest req, CancellationToken ct)
+    public PipeResponse HandlePipeRequest(PipeRequest req)
     {
-        return Dispatch(req, ct);
+        return Dispatch(req);
     }
 
     /// <summary>
@@ -215,12 +212,12 @@ internal sealed class NotifierHost(
     /// the pipe server's own try/catch would otherwise turn it into a generic
     /// "Pipe handler threw" log entry and a launcher-friendly error is better.
     /// </summary>
-    private async Task<PipeResponse> Dispatch(PipeRequest req, CancellationToken ct)
+    private PipeResponse Dispatch(PipeRequest req)
     {
         switch (req)
         {
             case OpenUrlRequest open:
-                return await ResolveAndLaunch(open, ct).ConfigureAwait(false);
+                return ResolveAndLaunch(open);
             case GcRequest:
                 return HandleGc();
             default:
@@ -256,12 +253,12 @@ internal sealed class NotifierHost(
 
     /// <summary>
     /// Resolve a URL request to a route, launch the browser, toast-notify.
-    /// Runs on a thread-pool worker (called via <see cref="HandlePipeRequest"/>);
-    /// touches the notifier's thread indirectly (it's all thread-safe).
-    /// The cancellation token flows into <see cref="BrowserLauncher.Launch"/> so a
-    /// per-request timeout can skip a late <c>Process.Start</c>.
+    /// Runs on the pipe server's dedicated handler thread (called via
+    /// <see cref="HandlePipeRequest"/>); touches the notifier's thread indirectly
+    /// (it's all thread-safe). Synchronous: <see cref="BrowserLauncher.Launch"/>
+    /// calls <c>Process.Start</c> directly (typically 50 ms).
     /// </summary>
-    private async Task<OpenUrlResponse> ResolveAndLaunch(OpenUrlRequest req, CancellationToken ct)
+    private OpenUrlResponse ResolveAndLaunch(OpenUrlRequest req)
     {
         // Two PIDs are interesting in a click: the originating process (the one
         // the user actually clicked a link in) and the Launcher (the small AOT
@@ -280,7 +277,7 @@ internal sealed class NotifierHost(
         }
 
         // NotNullWhen(true) on route guarantees non-null here.
-        var pid = await launcher.Launch(route, ct).ConfigureAwait(false);
+        var pid = launcher.Launch(route);
         if (pid is null)
         {
             notifier.Notify($"Failed to launch {route.BrowserName}");

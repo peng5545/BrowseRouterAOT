@@ -325,9 +325,8 @@ internal sealed class ToastNotifier : IDisposable
     {
         // Defense-in-depth: even if an action slipped past the Notify gate, the
         // closing message loop has the final say. Creating an HWND with no loop
-        // to process its messages would leak it (the GCHandle would be cleaned
-        // up by the finalizer, but the HWND itself is OS-reclaimed only at
-        // process exit).
+        // to process its messages would leak it (the HWND itself is OS-reclaimed
+        // only at process exit).
         if (Volatile.Read(ref _shutdownState) != 0)
             return;
 
@@ -343,10 +342,22 @@ internal sealed class ToastNotifier : IDisposable
         var toast = new ToastWindow(Constants.AppName, message, durationMs, _log, OnToastClosed);
         var workArea = GetPrimaryWorkArea();
 
-        // Provisional position — Show needs an HWND to query DPI, so we offer a
+        // Provisional position - Show needs an HWND to query DPI, so we offer a
         // best-effort initial location and re-layout right after.
-        if (!toast.Show(ToastClassName, workArea.Right, workArea.Bottom, hInstance))
+        try
         {
+            if (!toast.Show(ToastClassName, workArea.Right, workArea.Bottom, hInstance))
+            {
+                toast.Dispose();
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Show() shouldn't throw (all Win32 calls return error codes), but
+            // if it does we must Dispose so GDI handles and the GCHandle don't
+            // leak - there is no finalizer backstop anymore.
+            _log.Error("Toast Show threw", ex);
             toast.Dispose();
             return;
         }

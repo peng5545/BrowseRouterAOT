@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using Microsoft.Win32.SafeHandles;
+using System.Runtime.InteropServices;
 
 namespace BrowseRouter.Host.Interop;
 
@@ -72,4 +73,31 @@ internal static partial class Gdi32
         int nWidthEllipse,
         int nHeightEllipse
     );
+}
+
+/// <summary>
+/// <see cref="SafeHandle"/> wrapper for a GDI object (brush, font, region, etc.).
+/// Calls <see cref="Gdi32.DeleteObject"/> on release. AOT-compatible.
+/// <para>
+/// Critical finalizers (SafeHandle) run in a separate pass AFTER regular
+/// finalizers, so they never back up the regular finalization queue. This is
+/// what distinguishes them from a regular ~ destructor and makes them safe
+/// to use on types whose finalization must not delay Thread object cleanup.
+/// </para>
+/// </summary>
+internal sealed class SafeGdiObjectHandle : SafeHandleZeroOrMinusOneIsInvalid
+{
+    public SafeGdiObjectHandle() : base(ownsHandle: true)
+    {
+    }
+
+    public SafeGdiObjectHandle(IntPtr existingHandle) : base(ownsHandle: true)
+    {
+        SetHandle(existingHandle);
+    }
+
+    protected override bool ReleaseHandle()
+    {
+        return Gdi32.DeleteObject(handle);
+    }
 }

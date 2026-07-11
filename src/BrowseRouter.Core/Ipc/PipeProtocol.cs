@@ -93,6 +93,69 @@ public static class PipeProtocol
     }
 
     /// <summary>
+    /// Synchronous version of <see cref="WriteAsync"/>. Used by the Host's
+    /// dedicated handler thread which uses blocking I/O (no ThreadPool, no IOCP).
+    /// </summary>
+    public static void Write<T>(Stream stream, T value, JsonTypeInfo<T> typeInfo)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        var json = JsonSerializer.SerializeToUtf8Bytes(value, typeInfo);
+        if (json.Length > MaxMessageBytes)
+            throw new InvalidOperationException(
+                $"Pipe message too large: {json.Length} bytes (max {MaxMessageBytes}).");
+
+        var header = new byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(header, json.Length);
+        stream.Write(header);
+        stream.Write(json);
+        stream.Flush();
+    }
+
+    /// <summary>
+    /// Synchronous version of <see cref="ReadAsync"/>. Returns <c>null</c> if the
+    /// peer closed the pipe before sending a complete message.
+    /// </summary>
+    public static T? Read<T>(Stream stream, JsonTypeInfo<T> typeInfo) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        var header = new byte[4];
+        if (!ReadExact(stream, header))
+            return null;
+        var length = BinaryPrimitives.ReadInt32LittleEndian(header);
+        if (length is <= 0 or > MaxMessageBytes)
+            throw new InvalidOperationException($"Invalid pipe message length: {length}.");
+
+        var body = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            return !ReadExact(stream, body.AsSpan(0, length))
+                ? null
+                : JsonSerializer.Deserialize(body.AsSpan(0, length), typeInfo);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(body);
+        }
+    }
+
+    /// <summary>
+    /// Read exactly <c>buffer.Length</c> bytes synchronously. Returns false on EOF.
+    /// </summary>
+    private static bool ReadExact(Stream stream, Span<byte> buffer)
+    {
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var read = stream.Read(buffer[offset..]);
+            if (read == 0)
+                return false;
+            offset += read;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Build the fully-qualified pipe name for the current user / session, given a
     /// base name (typically <see cref="Constants.PipeBaseName"/>). Scoping by SID
     /// and session id prevents cross-session collisions on RDP / Fast User Switching.

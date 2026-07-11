@@ -1,248 +1,297 @@
 ﻿using BrowseRouter.Core.Ipc;
 using BrowseRouter.Core.Json;
 using BrowseRouter.Host.Logging;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace BrowseRouter.Host.Ipc;
 
 /// <summary>
-/// Named-pipe server hosting one logical endpoint per (user, session). Accepts
-/// many concurrent client connections via the
-/// <see cref="NamedPipeServerStream.MaxAllowedServerInstances"/> pattern with an
-/// accept-then-renew loop — the next listener is constructed immediately after a
-/// client arrives, so connections are never refused while a previous client is
-/// still being handled.
+/// Named-pipe server hosting one logical endpoint per (user, session). Uses a
+/// producer-consumer pattern with two dedicated threads:
+/// <list type="bullet">
+/// <item><b>Accept thread</b> - creates a <see cref="NamedPipeServerStream"/> with
+/// <see cref="PipeOptions.None"/> (synchronous), blocks on
+/// <see cref="NamedPipeServerStream.WaitForConnection()"/>, then enqueues the
+/// connected stream and immediately creates the next listener.</item>
+/// <item><b>Handler thread</b> - dequeues a connected stream, reads the request,
+/// invokes the handler, writes the response, and disposes the stream - all
+/// synchronously.</item>
+/// </list>
+///
+/// This design avoids <see cref="System.Threading.ThreadPool"/> and overlapped I/O
+/// entirely. In NativeAOT, async pipe I/O (<see cref="PipeOptions.Asynchronous"/>)
+/// creates IOCP completion threads per operation that are destroyed after an idle
+/// timeout; their OS thread handles persist (held by managed <c>Thread</c> objects
+/// in Gen 2) and are only released by a full GC - causing a +2 handle/click leak.
+/// By using synchronous I/O on dedicated threads, no threads are created or
+/// destroyed per click.
 /// </summary>
-internal sealed class PipeServer(
-    string pipeName,
-    FileLogger log,
-    Func<PipeRequest, CancellationToken, Task<PipeResponse>> handler
-) : IAsyncDisposable
+internal sealed class PipeServer(string pipeName, FileLogger log, Func<PipeRequest, PipeResponse> handler) : IDisposable
 {
-    /// <summary>
-    /// Per-request timeout. A client that connects but never finishes a request
-    /// is killed after this duration (linked to the server-shutdown token).
-    /// Prevents a stuck/malicious client from holding a handler task open
-    /// indefinitely.
-    /// </summary>
-    private static readonly TimeSpan PerRequestTimeout = TimeSpan.FromSeconds(5);
-
-    private CancellationTokenSource? _cts;
-    private Task? _loop;
-    private int _started; // 0 = not started, 1 = started. Interlocked gate.
-    private readonly List<Task> _inFlight = [];
+    // Created at construction so it is never null; AcceptLoop/HandlerLoop can use
+    // _cts.Token directly without null-forgiving (!) or null-conditional (?.).
+    private readonly CancellationTokenSource _cts = new();
+    private int _disposed; // idempotency guard for Dispose (Interlocked)
+    private Thread? _acceptThread;
+    private Thread? _handlerThread;
+    private readonly BlockingCollection<NamedPipeServerStream> _queue = new();
+    private NamedPipeServerStream? _currentServer; // for shutdown: dispose to unblock WaitForConnection
+    private int _started;
 
     /// <summary>
-    /// Begin listening. Returns immediately; the loop runs in the background.
-    /// Idempotent under concurrent calls — only the first wins.
+    /// Begin listening. Returns immediately; both threads run in the background.
+    /// Idempotent under concurrent calls - only the first wins.
     /// </summary>
     public void Start()
     {
         if (Interlocked.CompareExchange(ref _started, 1, 0) != 0)
             return;
-        _cts = new CancellationTokenSource();
-        _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
+        _acceptThread = new Thread(AcceptLoop)
+        {
+            IsBackground = true,
+            Name = "BrowseRouterAOT.PipeAccept"
+        };
+        _handlerThread = new Thread(HandlerLoop)
+        {
+            IsBackground = true,
+            Name = "BrowseRouterAOT.PipeHandler"
+        };
+        _acceptThread.Start();
+        _handlerThread.Start();
         log.Info($@"Pipe server listening on \\.\pipe\{pipeName}");
     }
 
-    private async Task AcceptLoopAsync(CancellationToken ct)
+    /// <summary>
+    /// Accept loop: create a synchronous pipe, wait for a client, enqueue the
+    /// connected stream, then loop back to create the next listener. Connections
+    /// are never refused while a previous client is still being handled - the
+    /// handler thread processes from the queue independently.
+    /// Create a synchronous pipe, block until a client connects, then enqueue
+    /// the connected stream for the handler thread. Returns true on success,
+    /// false if cancelled before enqueue. On any failure the pipe is disposed
+    /// in the finally block - ownership is either transferred to the queue
+    /// (success) or cleaned up (failure).
+    /// </summary>
+    private bool CreateConnectAndEnqueue(CancellationToken ct)
     {
+        NamedPipeServerStream? server = null;
+        try
+        {
+            server = new NamedPipeServerStream(pipeName, PipeDirection.InOut,
+                NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.None);
+            Volatile.Write(ref _currentServer, server);
+            server.WaitForConnection();
+            Volatile.Write(ref _currentServer, null);
+
+            if (ct.IsCancellationRequested)
+                return false;
+
+            _queue.Add(server, ct);
+            server = null; // ownership transferred to queue
+            return true;
+        }
+        finally
+        {
+            Volatile.Write(ref _currentServer, null);
+            server?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Accept loop: create a synchronous pipe, wait for a client, enqueue the
+    /// connected stream, then loop back to create the next listener. Connections
+    /// are never refused while a previous client is still being handled - the
+    /// handler thread processes from the queue independently.
+    /// </summary>
+    private void AcceptLoop()
+    {
+        var ct = _cts.Token;
         while (!ct.IsCancellationRequested)
         {
-            NamedPipeServerStream? server = null;
             try
             {
-                // Each loop iteration creates a fresh server instance, awaits a client,
-                // then hands the connected stream to a detached handler task and goes
-                // straight back to constructing the next listener. This eliminates the
-                // gap window where rapid clicks would otherwise see "no listener".
-                server = new NamedPipeServerStream(pipeName, PipeDirection.InOut,
-                    NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
-
-                await server.WaitForConnectionAsync(ct).ConfigureAwait(false);
-
-                // Detach: server is owned by HandleClientAsync from here on. Track
-                // the task so DisposeAsync can drain in-flight handlers instead of
-                // abandoning the request mid-flight (the launcher would then hang
-                // waiting for a response that's never going to come).
-                var owned = server;
-                server = null;
-                var task = HandleClientAsync(owned, ct);
-                TrackInFlight(task);
+                if (!CreateConnectAndEnqueue(ct))
+                    break; // cancelled
             }
             catch (OperationCanceledException)
             {
-                return;
+                break;
+            }
+            catch (InvalidOperationException)
+            {
+                // CompleteAdding was called during shutdown
+                break;
             }
             catch (Exception ex)
             {
                 log.Warn($"Pipe accept failed; will retry. {ex.GetType().Name}: {ex.Message}");
                 try
                 {
-                    await Task.Delay(250, ct).ConfigureAwait(false);
+                    ct.WaitHandle.WaitOne(250);
                 }
-                catch (OperationCanceledException)
+                catch
                 {
-                    // Token fired during the back-off — shut down.
-                    return;
-                }
-                catch (ObjectDisposedException)
-                {
-                    // CTS disposed during the back-off (DisposeAsync racing) — same exit.
-                    return;
-                }
-            }
-            finally
-            {
-                if (server != null)
-                {
-                    await server.DisposeAsync().ConfigureAwait(false);
+                    // ignored
                 }
             }
         }
     }
 
-    private async Task HandleClientAsync(NamedPipeServerStream stream, CancellationToken serverCt)
+    /// <summary>
+    /// Handler loop: dequeue a connected stream, read the request, invoke the
+    /// handler, write the response, dispose the stream. All synchronous - no
+    /// async state machine, no ThreadPool, no IOCP.
+    /// </summary>
+    private void HandlerLoop()
     {
-        // Per-request timeout linked to the server-shutdown token. If a client
-        // connects and then sits silent (or the Host is so backed up that the
-        // pipe write blocks), the request is aborted after PerRequestTimeout
-        // and the stream is disposed.
-        using var reqCts = CancellationTokenSource.CreateLinkedTokenSource(serverCt);
-        reqCts.CancelAfter(PerRequestTimeout);
-        var ct = reqCts.Token;
+        var ct = _cts.Token;
+        while (!ct.IsCancellationRequested)
+        {
+            NamedPipeServerStream? stream;
+            try
+            {
+                stream = _queue.Take(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (InvalidOperationException)
+            {
+                // CompleteAdding was called and queue is empty
+                break;
+            }
+
+            try
+            {
+                using (stream)
+                {
+                    var req = PipeProtocol.Read(stream, AppJsonContext.Default.PipeRequest);
+                    if (req is null)
+                    {
+                        log.Warn("Client connected then disconnected before sending a request.");
+                        continue;
+                    }
+
+                    PipeResponse rsp;
+                    try
+                    {
+                        rsp = handler(req);
+                    }
+                    catch (Exception ex)
+                    {
+                        log.Error("Pipe handler threw", ex);
+                        rsp = new OpenUrlResponse { Ok = false, Error = $"{ex.GetType().Name}: {ex.Message}" };
+                    }
+
+                    PipeProtocol.Write(stream, rsp, AppJsonContext.Default.PipeResponse);
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Warn($"Client handler: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Shut down: cancel the CTS, dispose the current pipe (to unblock the accept
+    /// thread's WaitForConnection), drain the queue, and join both threads.
+    /// </summary>
+    public void Dispose()
+    {
+        if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+            return;
+
+        _cts.Cancel();
+
+        // Unblock + join the accept thread BEFORE marking the queue complete:
+        // the accept thread is the only producer, so once it has exited no more
+        // items can be enqueued. See UnblockAcceptThread for why a dummy client
+        // connection is needed instead of just closing the pipe handle.
+        UnblockAcceptThread();
+
+        _queue.CompleteAdding();
+
+        // Drain any queued streams that the handler has not processed yet.
+        while (_queue.TryTake(out var leftover))
+        {
+            try
+            {
+                leftover.Dispose();
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        // Handler thread should exit after the queue is drained and CompleteAdding was called.
         try
         {
-            await using (stream)
-            {
-                var req = await PipeProtocol.ReadAsync(stream, AppJsonContext.Default.PipeRequest, ct)
-                    .ConfigureAwait(false);
-                if (req is null)
-                {
-                    log.Warn("Client connected then disconnected before sending a request.");
-                    return;
-                }
+            _handlerThread?.Join(TimeSpan.FromSeconds(5));
+        }
+        catch
+        {
+            // ignored
+        }
 
-                PipeResponse rsp;
-                try
-                {
-                    rsp = await handler(req, ct).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    // Per-request timeout or server shutdown - let it propagate
-                    // to the outer catch instead of being turned into an error
-                    // response (the caller has already given up waiting).
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    log.Error("Pipe handler threw", ex);
-                    rsp = new OpenUrlResponse { Ok = false, Error = $"{ex.GetType().Name}: {ex.Message}" };
-                }
-
-                await PipeProtocol.WriteAsync(stream, rsp, AppJsonContext.Default.PipeResponse, ct)
-                    .ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) when (serverCt.IsCancellationRequested)
-        {
-            // Server is shutting down — quiet exit.
-        }
-        catch (OperationCanceledException)
-        {
-            // Per-request timeout fired. The launcher will see a dropped
-            // connection and treat it as "Host unreachable", which is the
-            // correct user-facing behaviour for a stuck client.
-            log.Warn($"Pipe handler exceeded {PerRequestTimeout.TotalSeconds:F0}s; aborting.");
-        }
-        catch (Exception ex)
-        {
-            log.Warn($"Client handler: {ex.GetType().Name}: {ex.Message}");
-        }
+        _queue.Dispose();
+        _cts.Dispose();
     }
 
-    private void TrackInFlight(Task inner)
+    /// <summary>
+    /// Wake the accept thread out of a blocking
+    /// <see cref="NamedPipeServerStream.WaitForConnection"/> by connecting a
+    /// throwaway client. A synchronous pipe (<see cref="PipeOptions.None"/>) blocks
+    /// inside the kernel (<c>ConnectNamedPipe</c>) and is NOT reliably woken by
+    /// closing the handle from another thread, so disposing <c>_currentServer</c>
+    /// alone would leave the accept thread stuck until the Join timeout - a
+    /// multi-second exit delay every time. The dummy connection makes
+    /// <c>ConnectNamedPipe</c> return; the accept loop then observes the
+    /// cancellation and exits on its own. The loop retries because the accept
+    /// thread may create a fresh server instance between our connect attempts.
+    /// </summary>
+    private void UnblockAcceptThread()
     {
-        lock (_inFlight)
-        {
-            _inFlight.Add(inner);
-        }
+        if (_acceptThread is not { IsAlive: true } t)
+            return;
 
-        // Inline cleanup: await the handler, then remove from the in-flight
-        // set. No ContinueWith → no extra ThreadPool work item per request.
-        // Exceptions are already logged inside HandleClientAsync's own
-        // try/catch chain; the outer catch is a backstop for truly unexpected
-        // failures (e.g. a ThreadAbortException on older runtimes).
-        _ = Wrap(inner);
-        return;
-
-        async Task Wrap(Task t)
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (t.IsAlive && DateTime.UtcNow < deadline)
         {
             try
             {
-                await t.ConfigureAwait(false);
+                using var dummy = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.None);
+                dummy.Connect(150);
             }
             catch
             {
-                /* already logged inside HandleClientAsync */
+                // No server instance is listening right now (the accept thread is
+                // between iterations); the next iteration catches up once it
+                // creates the next listener.
             }
-            finally
-            {
-                lock (_inFlight)
-                {
-                    _inFlight.Remove(t);
-                }
-            }
+
+            if (t.Join(100))
+                return;
         }
-    }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_cts != null)
-            await _cts.CancelAsync().ConfigureAwait(false);
-
-        if (_loop is not null)
+        // Last resort: the accept thread still won't exit (e.g. the dummy
+        // connection never landed). Close its pipe handle so the OS resource is
+        // released; the background thread is then abandoned and reaped at
+        // process exit.
+        var current = Volatile.Read(ref _currentServer);
+        try
         {
-            try
-            {
-                await _loop.ConfigureAwait(false);
-            }
-            catch
-            {
-                /* swallowed */
-            }
-
-            _loop = null;
+            current?.Dispose();
         }
-
-        // Drain in-flight handlers so a Quit-during-click doesn't abandon a
-        // request that the launcher is still waiting on. Give them a brief
-        // grace period (longer than PerRequestTimeout ensures any timer
-        // already fired and unblocked the handler) then move on regardless.
-        Task[] toAwait;
-        lock (_inFlight)
+        catch
         {
-            toAwait = [.. _inFlight];
+            // ignored
         }
 
-        if (toAwait.Length > 0)
-        {
-            try
-            {
-                await Task.WhenAll(toAwait).WaitAsync(TimeSpan.FromSeconds(8)).ConfigureAwait(false);
-            }
-            catch
-            {
-                /* timeout or a handler swallowed OCE — proceed to teardown */
-            }
-        }
-
-        _cts?.Dispose();
-        _cts = null;
+        t.Join(200);
     }
 }

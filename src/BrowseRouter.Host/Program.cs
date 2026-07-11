@@ -171,7 +171,7 @@ internal static class Program
         }
         finally
         {
-            await server.DisposeAsync().ConfigureAwait(false);
+            server.Dispose();
         }
     }
 

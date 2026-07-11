@@ -29,17 +29,28 @@ namespace BrowseRouter.Host.Notify;
 /// <para><b>Lifecycle / leak contract.</b>
 /// The shared <c>WndProc</c> looks up the owning <see cref="ToastWindow"/>
 /// via a <c>GCHandle</c> stored in <c>GWLP_USERDATA</c>. The handle is
-/// <see cref="GCHandleType.Weak"/> — it does <b>not</b> root the instance,
-/// so the GC is free to collect a <see cref="ToastWindow"/> that the
-/// notifier has dropped (e.g. because <c>OnToastClosed</c> never fired).
-/// When that happens, the <see cref="Finalize"/> backstop frees the
-/// <c>GCHandle</c> and the three GDI handles, capping the leak at "the
-/// HWND + region" (both OS-owned and small) rather than "the whole
-/// managed object + GCHandle + 3 GDI handles forever".</para>
+/// <see cref="GCHandleType.Weak"/> - it does <b>not</b> root the instance.
+/// <see cref="Dispose"/> is called from <c>OnToastClosed</c> (fired during
+/// <c>WM_NCDESTROY</c>) in the normal flow, and from <c>CloseAllToasts</c>
+/// during shutdown.</para>
+///
+/// <para><b>No finalizer.</b> This class deliberately has no
+/// <c>~ToastWindow()</c> finalizer. A previous version had one as a backstop
+/// for the case where <c>Dispose</c> was never called. That finalizer was the
+/// only regular (non-critical) finalizer in the process; when
+/// <see cref="ToastWindow"/> objects reached the finalization queue they
+/// delayed finalization of <c>Thread</c> objects from the thread pool,
+/// causing OS thread handles to accumulate over time. Removing the finalizer
+/// eliminates <see cref="ToastWindow"/> from the finalization queue entirely.
+/// GDI handles are wrapped in <see cref="SafeGdiObjectHandle"/> (a
+/// <c>SafeHandle</c> whose critical finalizer runs in a separate pass
+/// after regular finalizers, so it never backs up the queue). The
+/// <c>GCHandle</c> and HWND leak only if <c>Dispose</c> is never called (a
+/// rare error path), and those leaks do not hold thread handles.</para>
 ///
 /// <para>The <c>WndProc</c>'s pattern match
 /// <c>{ IsAllocated: true, Target: ToastWindow toast }</c> tolerates a
-/// collected weak target — <c>Target</c> is <c>null</c> in that case, the
+/// collected weak target - <c>Target</c> is <c>null</c> in that case, the
 /// pattern fails, and the message falls through to <c>DefWindowProc</c>.</para>
 /// </summary>
 internal sealed class ToastWindow(
@@ -77,9 +88,9 @@ internal sealed class ToastWindow(
     private static readonly uint ColourTitle = Gdi32.Rgb(0xFF, 0xFF, 0xFF);
     private static readonly uint ColourBody = Gdi32.Rgb(0xCC, 0xCC, 0xCC);
 
-    private IntPtr _backgroundBrush;
-    private IntPtr _titleFont;
-    private IntPtr _bodyFont;
+    private SafeGdiObjectHandle? _backgroundBrush;
+    private SafeGdiObjectHandle? _titleFont;
+    private SafeGdiObjectHandle? _bodyFont;
     private GCHandle _selfHandle;
     private bool _inNcDestroy;
     private bool _closing;
@@ -116,11 +127,10 @@ internal sealed class ToastWindow(
 
         // Anchor a WEAK GCHandle in GWLP_USERDATA so the shared WndProc can
         // dispatch messages back to this instance. Weak is deliberate: a
-        // strong (Normal) handle would root this instance and prevent the
-        // finalizer backstop from ever running, which leaks the GCHandle
-        // and three GDI handles if OnToastClosed ever fails to fire.
-        // The WndProc's pattern match handles the (target == null) case
-        // by falling through to DefWindowProc.
+        // strong (Normal) handle would root this instance and prevent the GC
+        // from collecting it if OnToastClosed ever fails to fire (leaking the
+        // managed object indefinitely). The WndProc's pattern match handles
+        // the (target == null) case by falling through to DefWindowProc.
         _selfHandle = GCHandle.Alloc(this, GCHandleType.Weak);
         User32.SetWindowLongPtr(Handle, User32.GwlpUserdata, GCHandle.ToIntPtr(_selfHandle));
 
@@ -139,9 +149,9 @@ internal sealed class ToastWindow(
         // the toast's lifetime and are released in Dispose(). Title is
         // 12pt bold (a quiet header — the body is the actual content), body
         // is 11pt regular.
-        _backgroundBrush = Gdi32.CreateSolidBrush(ColourBg);
-        _titleFont = CreateFont(dpi, 12, Gdi32.FwBold);
-        _bodyFont = CreateFont(dpi, 11, Gdi32.FwNormal);
+        _backgroundBrush = new SafeGdiObjectHandle(Gdi32.CreateSolidBrush(ColourBg));
+        _titleFont = new SafeGdiObjectHandle(CreateFont(dpi, 12, Gdi32.FwBold));
+        _bodyFont = new SafeGdiObjectHandle(CreateFont(dpi, 11, Gdi32.FwNormal));
 
         // Rounded corners — match the Windows 11 toast aesthetic.
         var radius = Scale(LogicalCornerRadius, dpi);
@@ -155,7 +165,8 @@ internal sealed class ToastWindow(
         // Start auto-dismiss. Clamp to [500, 60000]; values below 500ms render
         // basically as flashes and 60s is well above any reasonable use case.
         var clamped = Math.Clamp(durationMs, 500, 60_000);
-        User32.SetTimer(Handle, TimerId, (uint) clamped, IntPtr.Zero);
+        if (User32.SetTimer(Handle, TimerId, (uint) clamped, IntPtr.Zero) == UIntPtr.Zero)
+            log.Warn($"SetTimer failed (toast will not auto-dismiss): {Marshal.GetLastWin32Error()}");
 
         // Force a paint now so the toast appears with content rather than as a
         // momentarily empty rectangle.
@@ -259,31 +270,24 @@ internal sealed class ToastWindow(
     /// </summary>
     public void Dispose()
     {
-        Dispose(disposing: true);
-        GC.SuppressFinalize(this);
-    }
-
-    /// <summary>
-    /// Finalizer backstop for the case where <see cref="Dispose()"/> is
-    /// never invoked — e.g. the notifier dropped the toast without
-    /// <c>OnToastClosed</c> firing. Runs on the GC thread.
-    ///
-    /// <para>
-    /// Because <c>_selfHandle</c> is <see cref="GCHandleType.Weak"/>, the
-    /// GC is free to collect this instance and queue this finalizer. We
-    /// then release the <c>GCHandle</c> slot and the three GDI handles
-    /// (best effort — <c>DeleteObject</c> on a not-currently-valid handle
-    /// is a no-op). We deliberately do <b>not</b> call <c>DestroyWindow</c>
-    /// or <c>SetWindowLongPtr</c> here: we don't know whether the HWND is
-    /// still alive, and touching USER32 from a non-message thread can
-    /// deadlock (DestroyWindow) or fault against a freed window
-    /// (SetWindowLongPtr). The leaked HWND is small (one kernel object)
-    /// and reclaimed when its owning process exits.
-    /// </para>
-    /// </summary>
-    ~ToastWindow()
-    {
-        Dispose(disposing: false);
+        // Dispose must never throw: it is called from WM_NCDESTROY inside the
+        // message loop, where an unhandled exception would crash the loop and
+        // orphan every subsequent toast.
+        try
+        {
+            Dispose(disposing: true);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                log.Warn($"ToastWindow Dispose: {ex.Message}");
+            }
+            catch
+            {
+                /* logger may be disposed */
+            }
+        }
     }
 
     private void Dispose(bool disposing)
@@ -295,50 +299,61 @@ internal sealed class ToastWindow(
         _disposed = true;
 
         var hwnd = Handle;
-        // Zero out the public handle snapshot first — anyone reading Handle
+        // Zero out the public handle snapshot first - anyone reading Handle
         // after this point sees "gone", which is the truth.
         Handle = IntPtr.Zero;
 
+        // Destroy the HWND only from a managed Dispose where the window is
+        // still alive and we are NOT already inside WM_NCDESTROY. The normal
+        // close path (Close -> DestroyWindow -> WM_NCDESTROY -> OnToastClosed
+        // -> Dispose) has already destroyed the window by the time we get here.
         if (hwnd != IntPtr.Zero && disposing && !_inNcDestroy)
         {
-            // Dispose called from managed code (e.g. CloseAllToasts after a
-            // crash) and the window is still alive — tear it down. The
-            // WM_NCDESTROY-driven path (normal flow) is filtered out by
-            // _inNcDestroy so we never call DestroyWindow on a half-destroyed
-            // window. The finalizer path (disposing==false) is also filtered
-            // out — see <see cref="~ToastWindow"/>.
-            User32.DestroyWindow(hwnd);
+            try
+            {
+                User32.DestroyWindow(hwnd);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    log.Warn($"DestroyWindow in Dispose: {ex.Message}");
+                }
+                catch
+                {
+                    // ignored
+                }
+            }
         }
 
-        if (_backgroundBrush != IntPtr.Zero)
-        {
-            Gdi32.DeleteObject(_backgroundBrush);
-            _backgroundBrush = IntPtr.Zero;
-        }
+        // Free GDI objects via their SafeHandle wrappers. SafeHandle.Dispose
+        // calls ReleaseHandle -> DeleteObject internally and is idempotent.
+        _backgroundBrush?.Dispose();
+        _backgroundBrush = null;
 
-        if (_titleFont != IntPtr.Zero)
-        {
-            Gdi32.DeleteObject(_titleFont);
-            _titleFont = IntPtr.Zero;
-        }
+        _titleFont?.Dispose();
+        _titleFont = null;
 
-        if (_bodyFont != IntPtr.Zero)
-        {
-            Gdi32.DeleteObject(_bodyFont);
-            _bodyFont = IntPtr.Zero;
-        }
+        _bodyFont?.Dispose();
+        _bodyFont = null;
 
+        // Free the GCHandle. When _inNcDestroy is true the window is being
+        // torn down inside WM_NCDESTROY - no further messages will arrive,
+        // so clearing GWLP_USERDATA is unnecessary (and would touch a
+        // half-destroyed window). The GCHandle itself is safe to free on
+        // any thread.
         if (_selfHandle.IsAllocated)
         {
-            // Only touch the HWND from a managed Dispose. From the finalizer
-            // we may be on a non-UI thread and the HWND is likely freed; the
-            // GCHandle itself is safe to free on any thread.
-            if (hwnd != IntPtr.Zero && disposing)
+            if (hwnd != IntPtr.Zero && disposing && !_inNcDestroy)
             {
-                // Clear the GCHandle from the window's user data BEFORE freeing
-                // the GCHandle itself, to avoid any late-arriving messages
-                // hitting a freed handle in the shared WndProc.
-                User32.SetWindowLongPtr(hwnd, User32.GwlpUserdata, IntPtr.Zero);
+                try
+                {
+                    User32.SetWindowLongPtr(hwnd, User32.GwlpUserdata, IntPtr.Zero);
+                }
+                catch
+                {
+                    /* best effort */
+                }
             }
 
             _selfHandle.Free();
@@ -363,13 +378,13 @@ internal sealed class ToastWindow(
             // 1) Background — solid dark fill. The rounded region clips this so
             // the corners stay rounded.
             var full = new User32.Rect { Left = 0, Top = 0, Right = Width, Bottom = Height };
-            User32.FillRect(hdc, ref full, _backgroundBrush);
+            User32.FillRect(hdc, ref full, _backgroundBrush?.DangerousGetHandle() ?? IntPtr.Zero);
 
             // Transparent text background — SetBkMode/SetTextColor return the
             // previous value, discarded explicitly to silence CA1806.
             _ = Gdi32.SetBkMode(hdc, Gdi32.Transparent);
 
-            var prevFont = Gdi32.SelectObject(hdc, _titleFont);
+            var prevFont = Gdi32.SelectObject(hdc, _titleFont?.DangerousGetHandle() ?? IntPtr.Zero);
             try
             {
                 // Row 1: title — bold white. Conventionally the app name
@@ -389,7 +404,7 @@ internal sealed class ToastWindow(
                 // space to the bottom padding. Conventionally the action the
                 // notification conveys, e.g. "cent->https://...".
                 _ = Gdi32.SetTextColor(hdc, ColourBody);
-                Gdi32.SelectObject(hdc, _bodyFont);
+                Gdi32.SelectObject(hdc, _bodyFont?.DangerousGetHandle() ?? IntPtr.Zero);
                 var bodyTop = pad + titleH + rowGap;
                 var bodyRect = new User32.Rect
                 {

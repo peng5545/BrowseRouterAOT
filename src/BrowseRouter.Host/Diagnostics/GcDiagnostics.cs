@@ -1,4 +1,4 @@
-using BrowseRouter.Host.Interop;
+﻿using BrowseRouter.Host.Interop;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -17,7 +17,7 @@ namespace BrowseRouter.Host.Diagnostics;
 /// <see cref="Snapshot.UserObjects"/>) are the headline numbers for the resource-
 /// leak audit: a stable count across a forced GC means the toast/tray code is
 /// not leaking brushes, fonts, regions, icons, or HWNDs. A count that only ever
-/// grows indicates a leak the finalizer backstop is NOT recovering.
+/// grows indicates a leak that Dispose is NOT recovering.
 /// </para>
 /// </summary>
 internal static class GcDiagnostics
@@ -172,9 +172,9 @@ internal static class GcDiagnostics
 
     /// <summary>
     /// Run a full, blocking, compacting GC (the most aggressive collection the
-    /// runtime offers — also drains the finalizer queue so any finalizer-backed
-    /// resource like <see cref="Notify.ToastWindow"/>'s backstop gets a chance
-    /// to release), then capture the post-collection snapshot. Returns the
+    /// runtime offers - also drains the finalizer queue so any finalizer-backed
+    /// resource gets a chance to release), then capture the post-collection
+    /// snapshot. Returns the
     /// snapshot plus the formatted report.
     /// </summary>
     public static (Snapshot Before, Snapshot After, string Report) RunForcedGc()
