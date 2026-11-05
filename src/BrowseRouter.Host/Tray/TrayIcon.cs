@@ -26,6 +26,7 @@ internal sealed class TrayIcon : IDisposable
 
     private Thread? _thread;
     private ushort _classAtom;
+    private uint _taskbarCreatedMsg;
     private Shell32.Notifyicondataw _nid;
     private bool _iconAdded;
 
@@ -96,6 +97,7 @@ internal sealed class TrayIcon : IDisposable
     {
         try
         {
+            _taskbarCreatedMsg = User32.RegisterWindowMessage("TaskbarCreated");
             RegisterWindowClass();
             CreateHiddenWindow();
             AddTrayIcon();
@@ -156,7 +158,7 @@ internal sealed class TrayIcon : IDisposable
     private void CreateHiddenWindow()
     {
         WindowHandle = User32.CreateWindowEx(0, WindowClassName, Constants.AppName, 0, 0, 0, 0, 0,
-            User32.HwndMessage, // message-only window
+            IntPtr.Zero, // hidden top-level window (HWND_MESSAGE does not receive TaskbarCreated broadcasts)
             IntPtr.Zero, Kernel32.GetModuleHandle(null), IntPtr.Zero);
         if (WindowHandle == IntPtr.Zero)
             throw new InvalidOperationException($"CreateWindowEx failed: {Marshal.GetLastWin32Error()}");
@@ -188,12 +190,28 @@ internal sealed class TrayIcon : IDisposable
         };
         _nid.SetTip(Constants.AppName);
 
+        RegisterTrayIcon();
+    }
+
+    private void ReAddTrayIcon()
+    {
+        if (_nid.hWnd == IntPtr.Zero)
+            return;
+
+        if (_iconAdded)
+        {
+            Shell32.Shell_NotifyIcon(Shell32.NimDelete, ref _nid);
+            _iconAdded = false;
+        }
+
+        RegisterTrayIcon();
+    }
+
+    private void RegisterTrayIcon()
+    {
         if (!Shell32.Shell_NotifyIcon(Shell32.NimAdd, ref _nid))
         {
             _log.Warn("Shell_NotifyIcon NIM_ADD failed.");
-            if (_iconIsOwned && ownedIcon != IntPtr.Zero)
-                User32.DestroyIcon(ownedIcon);
-            _iconIsOwned = false;
             return;
         }
 
@@ -207,18 +225,20 @@ internal sealed class TrayIcon : IDisposable
 
     private void RemoveTrayIcon()
     {
-        if (!_iconAdded)
-            return;
-
         // Snapshot ownership before NIM_DELETE so we can release the right handle
         // after the system has forgotten about it. _iconIsOwned distinguishes our
         // CreateIcon* HICON (must DestroyIcon) from a shared system icon (must NOT).
         var wasOwned = _iconIsOwned;
         var ownedIcon = wasOwned ? _nid.hIcon : IntPtr.Zero;
 
-        Shell32.Shell_NotifyIcon(Shell32.NimDelete, ref _nid);
-        _iconAdded = false;
+        if (_iconAdded)
+        {
+            Shell32.Shell_NotifyIcon(Shell32.NimDelete, ref _nid);
+            _iconAdded = false;
+        }
+
         _iconIsOwned = false;
+        _nid.hIcon = IntPtr.Zero;
 
         if (wasOwned && ownedIcon != IntPtr.Zero)
         {
@@ -228,6 +248,13 @@ internal sealed class TrayIcon : IDisposable
 
     private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+        if (msg != 0 && msg == _taskbarCreatedMsg)
+        {
+            _log.Info("TaskbarCreated received; re-registering tray icon.");
+            ReAddTrayIcon();
+            return IntPtr.Zero;
+        }
+
         switch (msg)
         {
             case CallbackMessage:

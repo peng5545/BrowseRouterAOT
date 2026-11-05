@@ -133,6 +133,9 @@ internal static partial class User32
     [LibraryImport("user32.dll")]
     public static partial void PostQuitMessage(int nExitCode);
 
+    [LibraryImport("user32.dll", EntryPoint = "RegisterWindowMessageW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    public static partial uint RegisterWindowMessage(string lpString);
+
     [LibraryImport("user32.dll")]
     public static partial IntPtr CreatePopupMenu();
 
