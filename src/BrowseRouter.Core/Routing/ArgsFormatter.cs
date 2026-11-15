@@ -148,7 +148,7 @@ public static class ArgsFormatter
             // Real token: `{name}`.
             if (c == '{')
             {
-                var close = input.IndexOf('}', i + 1);
+                var close = input.IndexOf('}', i + 1, StringComparison.OrdinalIgnoreCase);
                 if (close < 0)
                 {
                     // Unterminated — output the rest as literal.
