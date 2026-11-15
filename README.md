@@ -9,7 +9,7 @@ Route every link click on Windows to the browser **you** want, based on JSON rul
                                                        rules cached)
 ```
 
-Inspired by [nref/BrowseRouter](https://github.com/nref/BrowseRouter); rewritten on **.NET 10 + Native AOT** with a clean JSON schema, hot-reloading config.
+Inspired by [nref/BrowseRouter](https://github.com/nref/BrowseRouter); rewritten on **.NET 11 + Native AOT** with a clean JSON schema, hot-reloading config.
 
 Toast popup UI inspired by [noxad/windows-toast-notifications](https://github.com/noxad/windows-toast-notifications) — ported from WinForms to pure Win32 P/Invoke (no `System.Windows.Forms` / `System.Drawing`) to fit the AOT-only-Win32 rule.
 
@@ -179,6 +179,8 @@ BrowseRouter.Host.exe --host           Same as above (explicit).
 BrowseRouter.Host.exe --register       Register as a default-browser candidate.
 BrowseRouter.Host.exe --unregister     Remove registration + autostart.
 BrowseRouter.Host.exe --auto           Toggle register / unregister.
+BrowseRouter.Host.exe --gc             Force a GC in the running daemon and print diagnostics.
+BrowseRouter.Host.exe --quit | --exit  Gracefully stop the running daemon.
 BrowseRouter.Host.exe --help           Show help.
 ```
 
