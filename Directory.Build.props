@@ -17,10 +17,36 @@
     <NeutralLanguage>en-US</NeutralLanguage>
     <!-- LibraryImport source-generated P/Invoke uses internal unsafe pointer arithmetic. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IlcInstructionSet Condition="'$(RuntimeIdentifier)' == 'win-x64'">x86-64-v3</IlcInstructionSet>
+    <IlcFoldIdenticalMethodBodies>true</IlcFoldIdenticalMethodBodies>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <!-- Shared AOT compatibility, runtime-async & reflection-free JSON settings for all product projects. -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' != 'BrowseRouter.Tests'">
+    <IsAotCompatible>true</IsAotCompatible>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <Features>$(Features);runtime-async=on</Features>
+  </PropertyGroup>
+
+  <!-- Shared NativeAOT WinExe settings for Host and Launcher. -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'BrowseRouter.Host' or '$(MSBuildProjectName)' == 'BrowseRouter.Launcher'">
+    <OutputType>WinExe</OutputType>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>true</StripSymbols>
+    <DebuggerSupport>false</DebuggerSupport>
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+    <EventSourceSupport>false</EventSourceSupport>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <MetricsSupport>false</MetricsSupport>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\icon_res\icon.ico</ApplicationIcon>
   </PropertyGroup>
 
 </Project>

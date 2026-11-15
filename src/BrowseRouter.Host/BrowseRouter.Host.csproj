@@ -1,19 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
     <RootNamespace>BrowseRouter.Host</RootNamespace>
     <AssemblyName>BrowseRouter.Host</AssemblyName>
-    <PublishAot>true</PublishAot>
-    <InvariantGlobalization>true</InvariantGlobalization>
-    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
-    <StripSymbols>true</StripSymbols>
-    <OptimizationPreference>Speed</OptimizationPreference>
-    <EventSourceSupport>false</EventSourceSupport>
-    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
-    <UseSystemResourceKeys>true</UseSystemResourceKeys>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>..\..\icon_res\icon.ico</ApplicationIcon>
+    <OptimizationPreference>Size</OptimizationPreference>
   </PropertyGroup>
 
   <ItemGroup>
