@@ -28,4 +28,6 @@ namespace BrowseRouter.Core.Json;
 [JsonSerializable(typeof(PipeResponse))]
 [JsonSerializable(typeof(GcRequest))]
 [JsonSerializable(typeof(GcResponse))]
+[JsonSerializable(typeof(QuitRequest))]
+[JsonSerializable(typeof(QuitResponse))]
 public partial class AppJsonContext : JsonSerializerContext;

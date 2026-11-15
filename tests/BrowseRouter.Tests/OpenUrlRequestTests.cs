@@ -72,4 +72,17 @@ public class OpenUrlRequestTests
         Assert.Equal(5678, req.LauncherPid);
         Assert.Equal(2, req.LauncherSessionId);
     }
+
+    [Fact]
+    public void Quit_request_and_response_round_trip_polymorphically()
+    {
+        var reqJson = JsonSerializer.Serialize<PipeRequest>(new QuitRequest(), AppJsonContext.Default.PipeRequest);
+        var req = JsonSerializer.Deserialize(reqJson, AppJsonContext.Default.PipeRequest);
+        Assert.IsType<QuitRequest>(req);
+
+        var rspJson = JsonSerializer.Serialize<PipeResponse>(new QuitResponse { Ok = true }, AppJsonContext.Default.PipeResponse);
+        var rsp = JsonSerializer.Deserialize(rspJson, AppJsonContext.Default.PipeResponse);
+        var quit = Assert.IsType<QuitResponse>(rsp);
+        Assert.True(quit.Ok);
+    }
 }

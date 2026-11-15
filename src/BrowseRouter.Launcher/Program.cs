@@ -255,6 +255,7 @@ internal static class Program
         "--auto",
         "-h", "--help",
         "--gc",
+        "--quit", "--exit",
     };
 
     private static bool IsSubcommand(string arg) => Subcommands.Contains(arg);
@@ -272,7 +273,7 @@ internal static class Program
                                  BrowseRouter.Launcher.exe <url> [<url> …]
                                      Forward each URL to the running Host (starts one if needed).
 
-                                 BrowseRouter.Launcher.exe -r|--register   |  -u|--unregister  |  --auto  |  --gc  |  -h|--help
+                                 BrowseRouter.Launcher.exe -r|--register   |  -u|--unregister  |  --auto  |  --gc  |  --quit|--exit  |  -h|--help
                                      Convenience — delegated to BrowseRouter.Host.exe.
 
                                  To start the daemon manually, run BrowseRouter.Host.exe --host directly.

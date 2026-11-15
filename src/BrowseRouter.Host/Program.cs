@@ -53,8 +53,10 @@ internal static class Program
             return AutoToggle();
         if (EqualsAny(cmd, "--gc", "-gc"))
             return await RunGcAsync().ConfigureAwait(false);
+        if (EqualsAny(cmd, "--quit", "-quit", "--exit", "-exit"))
+            return await RunQuitAsync().ConfigureAwait(false);
 
-        await Console.Error.WriteLineAsync($"Unknown argument: {cmd}").ConfigureAwait(false);
+        WriteErrorLine($"Unknown argument: {cmd}");
         PrintHelp();
         return 2;
     }
@@ -103,7 +105,7 @@ internal static class Program
         // 4) Toast notifier + tray icon + event-host relay. The tray is optional
         // — when host.enableTrayIcon=false, the Host daemon still runs the pipe
         // server / config watcher, but exposes no UI. Exiting the daemon in
-        // headless mode is then possible only via Ctrl+C here, or Task Manager.
+        // headless mode is possible via `--quit` (or Ctrl+C / Task Manager).
         //
         // The toast notifier runs on its own STA message-loop thread, so it is
         // independent of the tray icon and works in headless mode too.
@@ -196,6 +198,54 @@ internal static class Program
     /// </summary>
     private static async Task<int> RunGcAsync()
     {
+        var (rc, rsp) = await SendControlRequestAsync(new GcRequest(), "--gc").ConfigureAwait(false);
+        if (rc != 0)
+            return rc;
+
+        if (rsp is not GcResponse gc)
+        {
+            WriteErrorLine(
+                $"{Constants.AppName}: unexpected response type from daemon: {rsp?.GetType().Name ?? "<null>"}.");
+            return 7;
+        }
+
+        Console.WriteLine(gc.Report ?? (gc.Ok ? "(no report)" : "(daemon reported failure)"));
+        return gc.Ok ? 0 : 8;
+    }
+
+    /// <summary>
+    /// <c>--quit</c> / <c>--exit</c> client mode: connects to the running Host
+    /// daemon over the per-user pipe and asks it to shut down gracefully.
+    /// Useful when the tray icon is disabled (<c>host.enableTrayIcon=false</c>).
+    /// </summary>
+    private static async Task<int> RunQuitAsync()
+    {
+        var (rc, rsp) = await SendControlRequestAsync(new QuitRequest(), "--quit").ConfigureAwait(false);
+        if (rc != 0)
+            return rc;
+
+        if (rsp is not QuitResponse quit)
+        {
+            WriteErrorLine(
+                $"{Constants.AppName}: unexpected response type from daemon: {rsp?.GetType().Name ?? "<null>"}.");
+            return 7;
+        }
+
+        if (quit.Ok)
+        {
+            Console.WriteLine($"{Constants.AppName} daemon is shutting down.");
+            return 0;
+        }
+
+        WriteErrorLine($"{Constants.AppName}: daemon rejected quit request.");
+        return 8;
+    }
+
+    private static async Task<(int ExitCode, PipeResponse? Response)> SendControlRequestAsync(
+        PipeRequest request,
+        string flagName
+    )
+    {
         var pipeName = PipeProtocol.BuildPipeName(Constants.PipeBaseName,
             WindowsIdentity.GetCurrent().User?.Value ?? "anon", CoreKernel32.GetCurrentSessionId());
 
@@ -212,38 +262,24 @@ internal static class Program
             }
             catch
             {
-                await Console.Error.WriteLineAsync(
-                        $@"{Constants.AppName}: daemon is not running on \\.\pipe\{pipeName}; cannot trigger GC.")
-                    .ConfigureAwait(false);
-                await Console.Error.WriteLineAsync("Start it first with 'BrowseRouter.Host.exe --host'.")
-                    .ConfigureAwait(false);
-                return 6;
+                WriteErrorLine(
+                    $"""{Constants.AppName}: daemon is not running on \\.\pipe\{pipeName}; cannot run {flagName}.""");
+                WriteErrorLine("Start it first with 'BrowseRouter.Host.exe --host'.");
+                return (6, null);
             }
 
             try
             {
-                await PipeProtocol.WriteAsync(client, new GcRequest(), AppJsonContext.Default.PipeRequest, ct)
+                await PipeProtocol.WriteAsync(client, request, AppJsonContext.Default.PipeRequest, ct)
                     .ConfigureAwait(false);
                 var rsp = await PipeProtocol.ReadAsync(client, AppJsonContext.Default.PipeResponse, ct)
                     .ConfigureAwait(false);
-
-                if (rsp is not GcResponse gc)
-                {
-                    await Console.Error.WriteLineAsync(
-                            $"{Constants.AppName}: unexpected response type from daemon: {rsp?.GetType().Name ?? "<null>"}.")
-                        .ConfigureAwait(false);
-                    return 7;
-                }
-
-                Console.WriteLine(gc.Report ?? (gc.Ok ? "(no report)" : "(daemon reported failure)"));
-                return gc.Ok ? 0 : 8;
+                return (0, rsp);
             }
             catch (Exception ex)
             {
-                await Console.Error
-                    .WriteLineAsync($"{Constants.AppName}: --gc failed: {ex.GetType().Name}: {ex.Message}")
-                    .ConfigureAwait(false);
-                return 8;
+                WriteErrorLine($"{Constants.AppName}: {flagName} failed: {ex.GetType().Name}: {ex.Message}");
+                return (8, null);
             }
         }
         finally
@@ -251,6 +287,8 @@ internal static class Program
             await client.DisposeAsync().ConfigureAwait(false);
         }
     }
+
+    private static void WriteErrorLine(string message) => Console.Error.WriteLine(message);
 
     private static int Register()
     {
@@ -420,6 +458,7 @@ internal static class Program
                              BrowseRouter.Host.exe --auto                Toggle: register if not present, else unregister.
                              BrowseRouter.Host.exe --gc                  Force a GC in the running daemon and print diagnostics
                                                                          (heap, handles, threads, GDI/USER objects, thread pool).
+                             BrowseRouter.Host.exe --quit | --exit       Gracefully stop the running daemon.
                              BrowseRouter.Host.exe -h | --help           Show this help.
 
                            Config file: {Constants.DefaultConfigFilePath}

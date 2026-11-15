@@ -11,4 +11,5 @@ namespace BrowseRouter.Core.Ipc;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(OpenUrlResponse), "openUrl")]
 [JsonDerivedType(typeof(GcResponse), "gc")]
+[JsonDerivedType(typeof(QuitResponse), "quit")]
 public abstract class PipeResponse;

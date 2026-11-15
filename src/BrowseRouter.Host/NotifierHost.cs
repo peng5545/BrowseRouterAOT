@@ -199,7 +199,8 @@ internal sealed class NotifierHost(
     /// <summary>
     /// Per-request handler for the named-pipe server. Dispatches on the
     /// polymorphic request type: <see cref="OpenUrlRequest"/> -> resolve + launch,
-    /// <see cref="GcRequest"/> -> forced GC + diagnostics.
+    /// <see cref="GcRequest"/> -> forced GC + diagnostics,
+    /// <see cref="QuitRequest"/> -> graceful daemon shutdown.
     /// </summary>
     public PipeResponse HandlePipeRequest(PipeRequest req)
     {
@@ -220,10 +221,23 @@ internal sealed class NotifierHost(
                 return ResolveAndLaunch(open);
             case GcRequest:
                 return HandleGc();
+            case QuitRequest:
+                return HandleQuit();
             default:
                 log.Warn($"Unknown pipe request type: {req.GetType().Name}");
                 return new OpenUrlResponse { Ok = false, Error = $"Unknown request type: {req.GetType().Name}" };
         }
+    }
+
+    /// <summary>
+    /// Graceful shutdown requested via the named pipe (<c>--quit</c>). Signals
+    /// the daemon's main loop to exit cleanly after this response is written.
+    /// </summary>
+    private QuitResponse HandleQuit()
+    {
+        log.Info("Quit requested via pipe (--quit).");
+        exitSignal.TrySetResult(0);
+        return new QuitResponse { Ok = true };
     }
 
     /// <summary>
